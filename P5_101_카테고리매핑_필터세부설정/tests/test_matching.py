@@ -328,6 +328,29 @@ def test_violates_gender_helper():
     assert mt.violates_gender("남성패션 > 모자", "아름트리-무신사-남성-모자-비니") is False
 
 
+def test_gender_of_english_women_is_not_men():
+    """★`women` 안의 `men` 때문에 여성 카테고리를 남성으로 읽던 문제."""
+    assert mt.gender_of("Womens Shoes") == "여성"
+    assert mt.gender_of("Woman Loafer") == "여성"
+    assert mt.gender_of("Men Shoes") == "남성"
+    assert mt.gender_of("Loafer") == ""
+
+
+def test_has_gender_english_notation():
+    assert mt.has_gender("Womens Shoes > Loafer", "여성") is True
+    assert mt.has_gender("Womens Shoes > Loafer", "남성") is False
+    assert mt.has_gender("Men Shoes > Loafer", "남성") is True
+
+
+def test_strip_opposite_gender_covers_english():
+    """영문 표기도 반대 성별이면 배제한다."""
+    cats = ["Men Shoes > Loafer", "Womens Shoes > Loafer", "Shoes > Loafer"]
+    assert mt.strip_opposite_gender(cats, "여성") == [
+        "Womens Shoes > Loafer",
+        "Shoes > Loafer",
+    ]
+
+
 def test_nearest_fallback_also_respects_gender():
     """최근접 지정 단계에서도 반대 성별은 나오지 않는다."""
     cats = ["남성패션 > 기타", "생활 > 주방 > 컵"]

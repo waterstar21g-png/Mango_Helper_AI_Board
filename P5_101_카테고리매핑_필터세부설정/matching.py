@@ -83,7 +83,7 @@ _SPLIT = re.compile(r"[\s/·,()\[\]|]+")
 # 최근접 판단 보조 — 성별 · 소재 · 용도/활용
 GENDER_WORDS = {
     "남성": ("남성", "남자", "맨즈", "men"),
-    "여성": ("여성", "여자", "우먼", "women"),
+    "여성": ("여성", "여자", "우먼", "women", "woman", "ladies"),
     "공용": ("공용", "유니섹스", "남녀"),
     "아동": ("아동", "키즈", "주니어", "베이비"),
 }
@@ -298,9 +298,22 @@ def _words_in(text: str, words: Iterable[str]) -> set[str]:
     return {w for w in words if normalize(w) in low}
 
 
-def gender_of(text: str) -> str:
+# 영문 표기 주의 — `women` 안에 `men` 이 들어 있어 여성 카테고리가 남성으로 잡힌다.
+FEMALE_EN_WORDS = ("women", "woman", "ladies")
+
+
+def gender_text(text: str, gender: str) -> str:
+    """성별 판정용 문자열. 남성을 볼 때는 여성 영문 표기를 먼저 지운다."""
     low = normalize(text)
+    if gender == "남성":
+        for word in FEMALE_EN_WORDS:
+            low = low.replace(word, "")
+    return low
+
+
+def gender_of(text: str) -> str:
     for gender, words in GENDER_WORDS.items():
+        low = gender_text(text, gender)
         if any(normalize(w) in low for w in words):
             return gender
     return ""
@@ -397,8 +410,10 @@ def ensure_from(paths: Sequence[str], category: str, name: str = "") -> str:
 
 
 def has_gender(path: str, gender: str) -> bool:
+    """경로가 그 성별 표기를 담고 있는가 (동의어·영문 표기 포함)."""
     words = GENDER_WORDS.get(gender, (gender,))
-    return any(path_hit(path, w) for w in words)
+    low = gender_text(path, gender)
+    return any(normalize(w) in low for w in words if str(w or "").strip())
 
 
 OPPOSITE = {"남성": ("여성",), "여성": ("남성",)}
@@ -416,13 +431,13 @@ def strip_opposite_gender(paths: Sequence[str], gender: str) -> list[str]:
     others = opposite_of(gender)
     if not others:
         return list(paths)
-    return [p for p in paths if not any(path_hit(p, o) for o in others)]
+    return [p for p in paths if not any(has_gender(p, o) for o in others)]
 
 
 def violates_gender(path: str, filter_name: str) -> bool:
     """고른 카테고리가 반대 성별 용어를 담고 있는가."""
     gender = gender_of(filter_name)
-    return any(path_hit(path, o) for o in opposite_of(gender))
+    return any(has_gender(path, o) for o in opposite_of(gender))
 
 
 def class_of(text: str) -> str:

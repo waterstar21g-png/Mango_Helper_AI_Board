@@ -1,4 +1,4 @@
-# 망고보드 GitHub 최신 반영 (PowerShell)
+﻿# 망고보드 GitHub 최신 반영 (PowerShell)
 # 사용: .\scripts\pull-update.ps1
 
 $ErrorActionPreference = "Stop"

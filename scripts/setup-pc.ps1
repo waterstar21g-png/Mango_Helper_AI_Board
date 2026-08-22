@@ -1,4 +1,4 @@
-# 망고보드 PC 최초 설정 (PowerShell)
+﻿# 망고보드 PC 최초 설정 (PowerShell)
 # 사용: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned  (최초 1회)
 #       .\scripts\setup-pc.ps1
 
