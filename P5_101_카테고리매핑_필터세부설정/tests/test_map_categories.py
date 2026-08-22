@@ -71,6 +71,46 @@ def test_pick_option_exact_then_leaf():
     assert mc.pick_option([], target) == ""
 
 
+# ── 검색 결과 선택의 성별 구분 ────────────────────────────────────
+
+
+def test_pick_option_keeps_gender_on_leaf_match():
+    """★여성 필터가 `남성신발 > 로퍼` 로 매칭되던 문제.
+
+    검색어는 리프(`로퍼`)뿐이라 망고가 남성·여성을 함께 돌려주는데, 예전에는
+    리프만 같으면 목록에 먼저 나온 남성 항목을 골랐다.
+    """
+    name = "아름트리-무신사-여성-신발-로퍼"
+    target = "패션의류잡화 > 여성신발 > 로퍼"
+    options = ["패션 > 남성신발 > 로퍼", "패션 > 여성신발 > 로퍼"]
+
+    assert mc.pick_option(options, target, name) == "패션 > 여성신발 > 로퍼"
+    # 필터명을 주지 않으면 예전 동작(리프 우선) 그대로 — 하위호환
+    assert mc.pick_option(options, target) == "패션 > 남성신발 > 로퍼"
+
+
+def test_pick_option_no_pick_when_only_opposite_gender():
+    """반대 성별만 있으면 고르지 않는다 (오매핑보다 미매핑이 낫다)."""
+    name = "아름트리-무신사-여성-신발-로퍼"
+    target = "패션의류잡화 > 여성신발 > 로퍼"
+    assert mc.pick_option(["패션 > 남성신발 > 로퍼"], target, name) == ""
+
+
+def test_pick_option_allows_genderless_option():
+    """성별 표기가 없는 항목은 남긴다 (마켓 대부분이 성별 없는 경로)."""
+    name = "아름트리-무신사-여성-신발-로퍼"
+    target = "패션의류잡화 > 여성신발 > 로퍼"
+    assert mc.pick_option(["패션 > 신발 > 로퍼"], target, name) == "패션 > 신발 > 로퍼"
+
+
+def test_gender_safe_options_prefers_same_gender():
+    name = "아름트리-무신사-남성-신발-로퍼"
+    options = ["여성신발 > 로퍼", "신발 > 로퍼", "남성신발 > 로퍼"]
+    assert mc.gender_safe_options(options, name) == ["남성신발 > 로퍼"]
+    # 성별을 알 수 없는 필터명이면 그대로 둔다
+    assert mc.gender_safe_options(options, "브랜드-사이트-로퍼") == options
+
+
 # ── 엑셀 로딩 ────────────────────────────────────────────────────
 
 

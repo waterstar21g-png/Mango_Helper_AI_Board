@@ -361,20 +361,47 @@ def search_keyword_for(category_path: str) -> str:
     return leaf_of(category_path)
 
 
-def pick_option(options: Sequence[str], category_path: str) -> str:
-    """검색 결과 목록에서 고를 항목 — 완전일치 → 리프일치 → 최고 유사도."""
+def gender_safe_options(options: Sequence[str], filter_name: str) -> list[str]:
+    """★검색 결과에도 성별 규칙을 적용한다.
+
+    검색어는 카테고리의 마지막 단계(예 `로퍼`) 뿐이라, 망고는 `남성신발 > 로퍼` 와
+    `여성신발 > 로퍼` 를 함께 돌려준다. 성별을 보지 않으면 목록에 먼저 나온 반대 성별
+    항목이 뽑히므로, 여기서 반대 성별을 걷어내고 같은 성별을 우선한다.
+    반대 성별만 남으면 빈 목록을 돌려 매핑하지 않게 한다.
+    """
+    pool = [o for o in options if str(o or "").strip()]
+    gender = matching.gender_of(filter_name)
+    if not gender:
+        return pool
+    safe = matching.strip_opposite_gender(pool, gender)
+    if not safe:
+        return []
+    same = [o for o in safe if matching.has_gender(o, gender)]
+    return same or safe
+
+
+def pick_option(
+    options: Sequence[str], category_path: str, filter_name: str = ""
+) -> str:
+    """검색 결과 목록에서 고를 항목 — 완전일치 → 리프일치 → 최고 유사도.
+
+    `filter_name` 을 주면 반대 성별 항목을 먼저 걷어낸 뒤 고른다.
+    """
     target = str(category_path or "").strip()
     if not target:
         return ""
+    pool = gender_safe_options(options, filter_name) if filter_name else list(options)
+    if not pool:
+        return ""
     norm = lambda s: "".join(str(s or "").split())  # noqa: E731
-    for opt in options:
+    for opt in pool:
         if norm(opt) == norm(target):
             return opt
     leaf = leaf_of(target)
-    for opt in options:
+    for opt in pool:
         if leaf and norm(leaf_of(opt)) == norm(leaf):
             return opt
-    best, score = similarity_best(target, list(options), min_score=0.0)
+    best, score = similarity_best(target, list(pool), min_score=0.0)
     return best if score > 0 else ""
 
 
@@ -916,8 +943,15 @@ def _map_once(
     if not options:
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
-    # 결과 목록에서는 **엑셀 카테고리** 를 기준으로 고른다 (필터명 아님)
-    picked = pick_option(options, category)
+    # 결과 목록에서는 **엑셀 카테고리** 를 기준으로 고른다 (필터명은 성별 판정용)
+    picked = pick_option(options, category, filter_name)
+    if not picked and matching.gender_of(filter_name):
+        gender = matching.gender_of(filter_name)
+        _log(progress, f"  {label}: 성별({gender}) 조건에 맞는 검색결과 없음", major=True)
+        return MappedItem(market, category, score, False, f"성별({gender}) 검색결과 없음")
+    if picked and matching.violates_gender(picked, filter_name):
+        _log(progress, f"  {label}: 반대 성별 결과 배제 → {picked}", major=True)
+        return MappedItem(market, category, score, False, "반대 성별 검색결과만 있음")
     if not picked or not choose_option(popup, market, picked, select_id=select_id):
         return MappedItem(market, category, score, False, "목록 선택 실패")
 
