@@ -473,3 +473,70 @@ def test_male_filter_never_falls_back_to_maternity_category():
     assert cat != "임부복"
     assert cat == "생활용품"
     assert step.startswith("3) 최근접")
+
+
+# ── 짧은 필터명(브랜드-사이트 없이 성별-상위-하위 3조각) 파싱 ──────
+
+
+def test_parse_filter_name_without_brand_site_prefix():
+    """★'여성-신발-구두' 처럼 3조각뿐이면 앞 2개를 브랜드-사이트로 오인해
+    성별·상위 정보를 통째로 날리면 안 된다.
+    """
+    p = mt.parse_filter_name("여성-신발-구두")
+    assert p.ignored == []
+    assert p.top == "여성"
+    assert p.mid == "신발"
+    assert p.lows == ["구두"]
+
+
+def test_parse_filter_name_still_ignores_brand_site_when_enough_segments():
+    """5조각 이상인 정상 필터명은 기존처럼 앞 2조각(브랜드-사이트)을 무시한다."""
+    p = mt.parse_filter_name("아름트리-무신사-남성-모자-비니")
+    assert p.ignored == ["아름트리", "무신사"]
+    assert p.top == "남성"
+    assert p.mid == "모자"
+
+
+def test_parse_filter_name_two_segments_gender_and_item():
+    p = mt.parse_filter_name("남성-신발")
+    assert p.ignored == []
+    assert p.top == "남성"
+    assert p.mid == "신발"
+
+
+def test_find_category_for_short_gender_item_item_filter():
+    """★요건: 필터명 '남성-잡화-신발' — 성별·상위·하위가 살아있어야 올바르게 고른다."""
+    name = "남성-잡화-신발"
+    cats = [
+        "잡화 > 남성신발",
+        "여성패션 > 신발 > 구두",       # 반대 성별 — 배제
+        "남성패션 > 상의 > 니트",       # 다른 품목(의류) — 배제
+    ]
+    cat, step = mt.find_category(name, cats)
+    assert cat == "잡화 > 남성신발"
+
+
+def test_find_category_falls_back_within_generic_when_no_shoe_class():
+    """신발 계열이 전혀 없으면 잡화 안에서 성별이 맞는 것을 고른다."""
+    name = "남성-잡화-신발"
+    cats = ["잡화 > 남성용품 > 지갑", "잡화 > 여성용품 > 파우치", "패션의류 > 남성 > 니트"]
+    cat, step = mt.find_category(name, cats)
+    assert cat == "잡화 > 남성용품 > 지갑"
+
+
+def test_find_category_picks_nearest_generic_when_nothing_matches_well():
+    """예) 잡화기타·구두기타 처럼 애매한 후보뿐이면 그중 가장 가까운 걸 고른다."""
+    name = "남성-잡화-신발"
+    cat, step = mt.find_category(name, ["잡화기타", "구두기타", "문구"])
+    assert cat == "구두기타"
+    assert step.startswith("3) 최근접")
+
+
+def test_shoe_synonyms_include_active_and_sports_shoes():
+    """★요건 예시 — '활동화'·'스포츠화' 도 신발 동의어로 인식한다."""
+    assert mt.class_of("잡화 > 남성 > 활동화") == "신발"
+    assert mt.class_of("잡화 > 남성 > 스포츠화") == "신발"
+    cat, step = mt.find_category(
+        "남성-잡화-신발", ["잡화 > 남성 > 활동화", "여성패션 > 상의"]
+    )
+    assert cat == "잡화 > 남성 > 활동화"
