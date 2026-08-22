@@ -1,3 +1,15 @@
+버전 2.9.1 (Python 보드)
+업데이트: .bat 실행 안 됨 — LF 줄바꿈 수정 (근본 원인).
+1) 원인 — 모든 .bat 이 LF 로만 저장돼 있었다. cmd.exe 는 LF 만 있는 .bat 을
+   제대로 파싱하지 못해 set "PY=py -3" 이 먹지 않고 %PY%가 빈 값이 됐다.
+   그 결과 call %PY% -m pip install ... 이 call -m pip install ... 로 실행돼
+   '-m' 은(는) 내부 또는 외부 명령... 오류로 죽었다. 망고보드가 전혀 뜨지
+   않은 근본 원인이다.
+2) .bat 파일 27개 전부 CRLF 로 변환.
+3) .gitattributes 신설 — *.bat·*.cmd 를 CRLF 로 못박아 이후 커밋에서
+   다시 LF 로 정규화되지 않게 한다.
+4) board/tests/test_bat_line_endings.py 신설 — CRLF·BOM 없음·PY 설정 순서 검증.
+
 버전 2.9.0 (Python 보드)
 업데이트: P3_설정수정_카테고리매핑초기화 를 요건대로 재작성 (P3_수집조건수정 기반).
 1) 요건 1번 위반을 바로잡았다 — P5_101 이 아니라 P3_필터단위_수집조건수정 소스를

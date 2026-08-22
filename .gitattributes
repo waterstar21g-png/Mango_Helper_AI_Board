@@ -1,0 +1,18 @@
+# Windows 실행 파일은 반드시 CRLF 로 체크아웃한다.
+#
+# cmd.exe 는 LF 만 있는 .bat 을 제대로 파싱하지 못한다. 라벨·goto 가 깨지고
+# `set "PY=py -3"` 이 먹지 않아 `%PY%` 가 빈 값이 되며, 결과적으로
+# `call -m pip install ...` 같은 명령이 실행돼 '-m 은(는) 내부 또는 외부 명령...'
+# 오류가 난다. 그래서 git 이 LF 로 정규화하지 못하게 못박는다.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell 은 LF 를 읽지만, 한글이 든 .ps1 은 BOM 이 필요하므로
+# git 이 내용을 건드리지 않게 바이너리 취급하지 않고 eol 만 고정한다.
+*.ps1 text eol=crlf
+
+# 나머지 텍스트는 LF 유지
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
