@@ -335,3 +335,98 @@ def test_reveal_does_not_raise_on_failure():
             raise RuntimeError("창 없음")
 
     rcm.reveal(FailingPage())  # 예외 없이 넘어가야 한다
+
+
+# ── 하단 페이지 로더 (요건: 작업행 번호가 페이지를 넘어가면 이어서 채운다) ──
+
+
+class FakePageLoader:
+    """pageLoad(N, site) 링크가 있는 목록 화면 — 페이지별로 행을 미리 정해둔다."""
+
+    def __init__(self, pages: dict[int, list[str]], last_page: int):
+        self.pages = pages          # {페이지번호: [ftid, ...]}
+        self.last_page = last_page
+        self.current = 1
+        self.clicked: list[int] = []
+
+    def locator(self, selector):
+        page_no = None
+        for tok in selector.split("'"):
+            if tok.isdigit():
+                page_no = int(tok)
+                break
+        return _PageLink(self, page_no)
+
+
+class _PageLink:
+    def __init__(self, loader: FakePageLoader, page_no):
+        self.loader = loader
+        self.page_no = page_no
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        if self.page_no is None:
+            return 0
+        return 1 if self.page_no <= self.loader.last_page else 0
+
+    def click(self, timeout=None):
+        if self.page_no is None or self.page_no > self.loader.last_page:
+            raise RuntimeError("없는 페이지")
+        self.loader.current = self.page_no
+        self.loader.clicked.append(self.page_no)
+
+
+def test_collect_rows_for_range_stays_on_page_when_enough(monkeypatch):
+    """요청 범위가 현재 페이지 안에서 끝나면 페이지를 넘기지 않는다."""
+    loader = FakePageLoader({1: [f"{i}" for i in range(1, 11)]}, last_page=3)
+    monkeypatch.setattr(rcm, "list_rows", lambda page: [
+        rcm.RowInfo(index=i, ftid=ftid) for i, ftid in enumerate(loader.pages[loader.current])
+    ])
+
+    rows = rcm.collect_rows_for_range(loader, 5, "musinsa")
+    assert len(rows) == 10
+    assert loader.clicked == []          # 페이지 이동 없음
+
+
+def test_collect_rows_for_range_advances_pages_until_enough(monkeypatch):
+    """★요건: 페이지 로더를 감안해 작업행 범위가 다음 페이지까지 이어서 채운다."""
+    loader = FakePageLoader(
+        {1: [str(i) for i in range(1, 11)], 2: [str(i) for i in range(11, 21)]},
+        last_page=2,
+    )
+    monkeypatch.setattr(rcm, "list_rows", lambda page: [
+        rcm.RowInfo(index=i, ftid=ftid) for i, ftid in enumerate(loader.pages[loader.current])
+    ])
+
+    rows = rcm.collect_rows_for_range(loader, 15, "musinsa")
+
+    assert loader.clicked == [2]                       # 2페이지로 딱 한 번만 이동
+    assert [r.ftid for r in rows] == [str(i) for i in range(1, 21)]
+
+
+def test_collect_rows_for_range_stops_at_last_page(monkeypatch):
+    """마지막 페이지까지 가도 부족하면 있는 만큼만 돌려준다(오류 없이)."""
+    loader = FakePageLoader({1: [str(i) for i in range(1, 6)]}, last_page=1)
+    monkeypatch.setattr(rcm, "list_rows", lambda page: [
+        rcm.RowInfo(index=i, ftid=ftid) for i, ftid in enumerate(loader.pages[loader.current])
+    ])
+
+    rows = rcm.collect_rows_for_range(loader, 50, "musinsa")
+
+    assert loader.clicked == []
+    assert len(rows) == 5
+
+
+def test_click_page_load_prefers_site_specific_selector():
+    loader = FakePageLoader({1: [], 2: []}, last_page=2)
+    assert rcm.click_page_load(loader, 2, "musinsa") is True
+    assert loader.clicked == [2]
+
+
+def test_has_page_true_only_within_last_page():
+    loader = FakePageLoader({1: [], 2: [], 3: []}, last_page=3)
+    assert rcm.has_page(loader, 3) is True
+    assert rcm.has_page(loader, 4) is False

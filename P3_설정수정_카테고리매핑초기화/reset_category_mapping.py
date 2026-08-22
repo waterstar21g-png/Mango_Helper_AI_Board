@@ -201,6 +201,76 @@ def wait_for_rows(
         time.sleep(ROWS_POLL_S)
 
 
+# 목록 화면 하단 페이지 로더 — <a onclick="pageLoad('2','musinsa');">2</a>
+PAGE_LOAD_JS = "pageLoad"
+
+
+def has_page(page, page_no: int) -> bool:
+    """하단 페이지 로더에 그 페이지 번호 링크가 있는지."""
+    sel = f"a[onclick*=\"{PAGE_LOAD_JS}('{page_no}'\"]"
+    try:
+        return page.locator(sel).first.count() > 0
+    except Exception:
+        return False
+
+
+def click_page_load(
+    page, page_no: int, site_id: str = "", *, progress: ProgressFn | None = None
+) -> bool:
+    """하단 페이지 로더에서 페이지 번호를 클릭한다 (`pageLoad(N, site)`)."""
+    site = str(site_id or "").strip()
+    selectors = []
+    if site:
+        selectors.append(f"a[onclick*=\"{PAGE_LOAD_JS}('{page_no}','{site}')\"]")
+    selectors.append(f"a[onclick*=\"{PAGE_LOAD_JS}('{page_no}'\"]")
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() == 0:
+                continue
+            loc.click(timeout=T_CLICK)
+            _log(progress, f"  페이지 로더 — {page_no}페이지 이동", major=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def collect_rows_for_range(
+    page,
+    end: int,
+    site_id: str = "",
+    *,
+    progress: ProgressFn | None = None,
+) -> list[RowInfo]:
+    """★요건: 하단 페이지 로더를 감안해 작업행 번호를 적용한다.
+
+    한 페이지 분량(현재 페이지에 뜬 행 수)을 넘는 작업행 범위가 요청되면,
+    하단 페이지 로더(`pageLoad(N, site)`)를 눌러 다음 페이지로 넘어가며
+    이어서 채운다. 요청 범위가 현재 페이지 안에서 끝나면 페이지를 넘기지
+    않는다(빠른 경로 — 기존 동작과 동일).
+    """
+    rows = wait_for_rows(page, progress=progress)
+    if not rows or end <= len(rows):
+        return rows
+
+    all_rows = list(rows)
+    page_no = 1
+    while len(all_rows) < end:
+        if not has_page(page, page_no + 1):
+            _log(progress, f"  페이지 로더 — {page_no}페이지가 마지막", major=True)
+            break
+        page_no += 1
+        if not click_page_load(page, page_no, site_id, progress=progress):
+            _log(progress, f"  경고: {page_no}페이지 이동 실패", major=True)
+            break
+        more = wait_for_rows(page, progress=progress)
+        if not more:
+            break
+        all_rows.extend(more)
+    return all_rows
+
+
 def reveal(page, *, progress: ProgressFn | None = None) -> None:
     """★크롬 창을 화면 맨 앞으로 — 작업 과정(팝업·입력·닫기)이 눈에 보이게 한다.
 
@@ -218,6 +288,7 @@ def search_and_collect(
     url: str,
     site_id: str,
     *,
+    end: int = 0,
     progress: ProgressFn | None = None,
 ) -> tuple[object, list[RowInfo], str]:
     """요건 0번: 입력한 「작업 URL」로 화면을 띄우고 → 사이트 선택 → 검색 → 행 수집.
@@ -225,6 +296,9 @@ def search_and_collect(
     사이트 선택/검색이 실패해도 행 수집은 그대로 진행한다 — 붙여넣은 URL 이
     이미 검색조건(site_id 등)을 담고 있어 화면에 결과가 떠 있는 경우가 있고,
     그때 여기서 멈추면 실제로 있는 행을 0건으로 오판하게 된다.
+
+    `end` 를 주면 그 행까지 필요한 만큼 하단 페이지 로더를 눌러 이어서 채운다
+    (요건: 페이지 로더 감안). 0 이면 현재 페이지만 스캔한다(빠른 경로).
     반환: (page, rows, 사용한 url)
     """
     page, used = p3opt._open_mango(pw, url, progress)
@@ -236,7 +310,10 @@ def search_and_collect(
             major=True,
         )
     page = p3opt.pick_list_page(page, progress=progress)
-    rows = wait_for_rows(page, progress=progress)
+    if end > 0:
+        rows = collect_rows_for_range(page, end, site_id, progress=progress)
+    else:
+        rows = wait_for_rows(page, progress=progress)
     return page, rows, used
 
 
@@ -460,7 +537,9 @@ def run_reset(
     try:
         with sync_playwright() as pw:
             # ★P3_수집조건수정 과 동일한 접속·검색 절차
-            page, found, url = search_and_collect(pw, url, site_id, progress=progress)
+            page, found, url = search_and_collect(
+                pw, url, site_id, end=end, progress=progress
+            )
             if not found:
                 result.errors.append("작업 대상 행이 없습니다 (검색 결과 확인).")
                 _log(progress, result.errors[0], major=True)
@@ -530,17 +609,20 @@ def list_rows_only(
         _log(progress, f"의존성 로드 실패: {e}", major=True)
         return []
 
+    start, end = (row_range(row_from, row_to) if str(row_from).strip() else (0, 0))
+
     rows: list[RowInfo] = []
     try:
         with sync_playwright() as pw:
-            page, rows, url = search_and_collect(pw, url, site_id, progress=progress)
+            page, rows, url = search_and_collect(
+                pw, url, site_id, end=end, progress=progress
+            )
             if not rows and page is not None:
                 diagnose(page, progress=progress)
     except Exception as e:  # noqa: BLE001
         _log(progress, f"행 목록 확인 오류: {e}", major=True)
         return []
 
-    start, end = (row_range(row_from, row_to) if str(row_from).strip() else (0, 0))
     _log(progress, f"검색 결과 {len(rows)}행", major=True)
     for i, row in enumerate(rows, start=1):
         mark = " ★" if start and start <= i <= end else ""

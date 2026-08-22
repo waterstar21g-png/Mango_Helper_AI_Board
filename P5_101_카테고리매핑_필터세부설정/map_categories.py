@@ -642,6 +642,76 @@ def list_rows(page) -> list[RowInfo]:
     return rows
 
 
+# 목록 화면 하단 페이지 로더 — <a onclick="pageLoad('2','musinsa');">2</a>
+PAGE_LOAD_JS = "pageLoad"
+
+
+def has_page(page, page_no: int) -> bool:
+    """하단 페이지 로더에 그 페이지 번호 링크가 있는지."""
+    sel = f"a[onclick*=\"{PAGE_LOAD_JS}('{page_no}'\"]"
+    try:
+        return page.locator(sel).first.count() > 0
+    except Exception:
+        return False
+
+
+def click_page_load(
+    page, page_no: int, site_id: str = "", *, progress: ProgressFn | None = None
+) -> bool:
+    """하단 페이지 로더에서 페이지 번호를 클릭한다 (`pageLoad(N, site)`)."""
+    site = str(site_id or "").strip()
+    selectors = []
+    if site:
+        selectors.append(f"a[onclick*=\"{PAGE_LOAD_JS}('{page_no}','{site}')\"]")
+    selectors.append(f"a[onclick*=\"{PAGE_LOAD_JS}('{page_no}'\"]")
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() == 0:
+                continue
+            loc.click(timeout=T_CLICK)
+            _log(progress, f"  페이지 로더 — {page_no}페이지 이동", major=True)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def collect_rows_for_range(
+    page,
+    end: int,
+    site_id: str = "",
+    *,
+    progress: ProgressFn | None = None,
+) -> list[RowInfo]:
+    """★요건: 하단 페이지 로더를 감안해 작업행 번호를 적용한다.
+
+    한 페이지 분량(현재 페이지에 뜬 행 수)을 넘는 작업행 범위가 요청되면
+    하단 페이지 로더(`pageLoad(N, site)`)를 눌러 다음 페이지로 넘어가며
+    이어서 채운다. 요청 범위가 현재 페이지 안에서 끝나면 페이지를 넘기지
+    않는다(빠른 경로 — 기존 동작과 동일).
+    """
+    rows = list_rows(page)
+    if not rows or end <= len(rows):
+        return rows
+
+    all_rows = list(rows)
+    page_no = 1
+    while len(all_rows) < end:
+        if not has_page(page, page_no + 1):
+            _log(progress, f"  페이지 로더 — {page_no}페이지가 마지막", major=True)
+            break
+        page_no += 1
+        if not click_page_load(page, page_no, site_id, progress=progress):
+            _log(progress, f"  경고: {page_no}페이지 이동 실패", major=True)
+            break
+        more = list_rows(page)
+        if not more:
+            break
+        all_rows.extend(more)
+    return all_rows
+
+
 def build_mapping_url(ftid: str, *, list_url: str = DEFAULT_LIST_URL) -> str:
     """설정수정 팝업 URL (`admin_category_set.php?tm=F&ps_ftid=<ftid>`)."""
     from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -1326,6 +1396,10 @@ def list_rows_only(
         _log(progress, f"의존성 로드 실패: {e}", major=True)
         return []
 
+    _start, _end = row_range(row_from or DEFAULT_ROW_FROM, row_to or DEFAULT_ROW_TO)
+    if not (str(row_from).strip() or str(row_to).strip()):
+        _end = 0  # 범위 지정이 없으면 현재 페이지만 (페이지 이동 없음)
+
     rows: list[RowInfo] = []
     try:
         with sync_playwright() as pw:
@@ -1336,7 +1410,11 @@ def list_rows_only(
             if not select_site(page, site_id, progress=progress):
                 _log(progress, "  사이트 선택을 건너뜁니다 — URL 화면 결과로 계속합니다", major=True)
             click_search_filter(page, progress=progress)
-            rows = list_rows(page)
+            rows = (
+                collect_rows_for_range(page, _end, site_id, progress=progress)
+                if _end > 0
+                else list_rows(page)
+            )
     except Exception as e:  # noqa: BLE001
         _log(progress, f"실행 오류: {e}", major=True)
         return rows
@@ -1403,7 +1481,10 @@ def run_mapping(
 
             # ★검색 결과 목록에 한해 수행 (선택조건으로 검색하기 이후 화면)
             #   체크 여부와 무관하게 **행 범위**로만 대상을 정한다 (요건 2026-08-22 15:03)
-            found = [r for r in list_rows(page) if r.ftid]
+            #   ★요건: 작업행 범위가 한 페이지를 넘으면 하단 페이지 로더를
+            #   눌러가며 이어서 채운다.
+            scanned = collect_rows_for_range(page, end, site_id, progress=progress)
+            found = [r for r in scanned if r.ftid]
             if not found:
                 result.errors.append("작업 대상 행이 없습니다 (검색 결과 확인).")
                 _log(progress, result.errors[0], major=True)
