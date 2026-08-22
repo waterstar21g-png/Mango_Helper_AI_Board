@@ -1,4 +1,4 @@
-# 망고보드 → 독립 GitHub 저장소(Mango_Helper_AI_Board) 올리기
+﻿# 망고보드 → 독립 GitHub 저장소(Mango_Helper_AI_Board) 올리기
 #
 # 사용: .\망고보드_독립저장소올리기.bat  (또는 .\scripts\publish-standalone.ps1)
 #

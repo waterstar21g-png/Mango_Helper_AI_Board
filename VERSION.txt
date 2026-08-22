@@ -1,3 +1,14 @@
+버전 2.7.3 (Python 보드)
+업데이트: 망고보드_독립저장소올리기.bat 구문 오류 수정.
+1) 원인 — scripts/*.ps1 이 BOM 없는 UTF-8 이라, Windows PowerShell 5.1 이
+   한글 Windows 기본 코드페이지(CP949)로 읽었다. 한글·기호(→·※)가 2바이트로
+   잘못 소비되면서 뒤따르는 큰따옴표를 삼켜 문자열이 깨지고,
+   'Unexpected token }' 구문 오류가 났다 (publish-standalone.ps1:85).
+2) scripts/*.ps1 4개 전부에 UTF-8 BOM 을 넣어 PowerShell 이 UTF-8 로 읽게 했다.
+   install-all.ps1 도 같은 결함이 있었다 (따옴표 2개 소실).
+3) board/tests/test_ps1_encoding.py 신설 — BOM 누락과 CP949 오해석 시
+   따옴표 개수가 달라지는 경우를 잡는다.
+
 버전 2.7.2 (Python 보드)
 업데이트: P5_101 화면 검색결과 선택에도 성별 규칙 적용.
 1) 원인 — 성별 배제(2.6.0)가 엑셀 카테고리를 고르는 단계에만 걸려 있었다.
