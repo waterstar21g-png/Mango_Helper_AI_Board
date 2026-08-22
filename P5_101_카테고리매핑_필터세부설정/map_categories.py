@@ -611,6 +611,14 @@ LIST_DIAG_JS = r"""
 () => {
   const anchors = Array.from(document.querySelectorAll('a[onclick]'));
   const mapping = anchors.filter(a => (a.getAttribute('onclick') || '').includes('market_mapping_new'));
+  // 화면이 실제로 쓰는 함수명·행 식별자를 그대로 뽑아낸다 (추측 없이 고치기 위해)
+  const fns = new Set();
+  for (const el of Array.from(document.querySelectorAll('[onclick]'))) {
+    const m = (el.getAttribute('onclick') || '').match(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g);
+    if (m) m.forEach(x => fns.add(x.replace(/\s*\($/, '')));
+  }
+  const tables = Array.from(document.querySelectorAll('table'))
+    .map(t => t.id || '').filter(Boolean);
   return {
     url: location.href,
     table: !!document.querySelector('table#search_category'),
@@ -618,6 +626,13 @@ LIST_DIAG_JS = r"""
     checkboxes: document.querySelectorAll('input[type="checkbox"]').length,
     mappingLinks: mapping.length,
     sample: mapping.slice(0, 3).map(a => (a.getAttribute('onclick') || '').slice(0, 60)),
+    attrUid: document.querySelectorAll('input[attr-uid]').length,
+    tdIds: document.querySelectorAll('td[id^="td_"]').length,
+    ftidLinks: Array.from(document.querySelectorAll('a,button,input,td'))
+      .filter(el => /ps_ftid=\d+/.test((el.getAttribute('onclick') || '')
+        + (el.getAttribute('href') || ''))).length,
+    tableIds: tables.slice(0, 8),
+    onclickFns: Array.from(fns).slice(0, 24),
   };
 }
 """
@@ -654,6 +669,16 @@ def diagnose_list(page, *, progress: ProgressFn | None = None) -> None:
         )
         # URL 은 잘리면 원인 파악이 안 되므로 통째로 남긴다
         _log(progress, f"  [진단] 프레임{i} url={info.get('url')}", major=True)
+        # 행 식별자 후보 — 어느 폴백으로 잡아야 하는지 바로 보이게
+        _log(
+            progress,
+            f"  [진단] 프레임{i} attr-uid={info.get('attrUid')}"
+            f" · td_id={info.get('tdIds')}"
+            f" · ps_ftid={info.get('ftidLinks')}"
+            f" · table id={info.get('tableIds')}",
+            major=True,
+        )
+        _log(progress, f"  [진단] 프레임{i} onclick 함수={info.get('onclickFns')}", major=True)
         if int(info.get("rows") or 0) == 0 and not info.get("table"):
             _log(
                 progress,
