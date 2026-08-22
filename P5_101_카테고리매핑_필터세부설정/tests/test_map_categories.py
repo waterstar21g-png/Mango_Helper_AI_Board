@@ -103,6 +103,42 @@ def test_pick_option_allows_genderless_option():
     assert mc.pick_option(["패션 > 신발 > 로퍼"], target, name) == "패션 > 신발 > 로퍼"
 
 
+# ── 엑셀 범위 밖 카테고리는 절대 선택하지 않는다 (요건) ────────────
+
+
+def test_pick_option_never_picks_category_outside_excel_list():
+    """★엑셀="남성 신발" · 망고="브랜드 남성 신발" — 글자가 겹쳐도 고르지 않는다.
+
+    예전에는 유사도 기반 3단계 폴백이 있어 이런 식으로 겹치기만 하면
+    엑셀에 없는 카테고리를 멋대로 골랐다. 이제 완전일치·리프일치가 아니면
+    아예 고르지 않는다(빈 문자열 반환) — 오매핑보다 미매핑이 낫다.
+    """
+    assert mc.pick_option(["브랜드 남성 신발"], "남성 신발", "아름트리-무신사-남성-신발") == ""
+    assert mc.pick_option(["남성 신발 브랜드관"], "남성 신발") == ""
+    assert mc.pick_option(["신발 남성 브랜드"], "남성 신발") == ""
+
+
+def test_pick_option_still_allows_leaf_match_for_multilevel_paths():
+    """다단 경로에서 마지막 단계(리프)가 정확히 같으면 표기 차이는 허용한다.
+
+    엑셀="패션의류잡화 > 여성신발 > 로퍼" · 망고="패션 > 여성신발 > 로퍼" —
+    마지막 단계 "로퍼" 가 정확히 같으므로(다른 겹치는 글자로 추정하지 않음)
+    이건 허용한다. 위 '브랜드 남성 신발' 사례와 다른 점은, 이 경로는 실제로
+    ">" 로 나뉜 마지막 단계가 정확히 일치한다는 것이다.
+    """
+    assert (
+        mc.pick_option(["패션 > 여성신발 > 로퍼"], "패션의류잡화 > 여성신발 > 로퍼")
+        == "패션 > 여성신발 > 로퍼"
+    )
+
+
+def test_pick_option_no_similarity_fallback_left():
+    """유사도 기반 추정 선택이 남아 있지 않은지 — 애매하면 반드시 빈 문자열."""
+    # "신발"이라는 공통 단어만 있고 리프/완전일치가 아닌 경우 전부 거부.
+    options = ["아동 신발", "잡화 신발 액세서리", "신발끈"]
+    assert mc.pick_option(options, "남성 신발") == ""
+
+
 def test_gender_safe_options_prefers_same_gender():
     name = "아름트리-무신사-남성-신발-로퍼"
     options = ["여성신발 > 로퍼", "신발 > 로퍼", "남성신발 > 로퍼"]

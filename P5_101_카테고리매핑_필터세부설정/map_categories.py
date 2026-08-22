@@ -383,7 +383,14 @@ def gender_safe_options(options: Sequence[str], filter_name: str) -> list[str]:
 def pick_option(
     options: Sequence[str], category_path: str, filter_name: str = ""
 ) -> str:
-    """검색 결과 목록에서 고를 항목 — 완전일치 → 리프일치 → 최고 유사도.
+    """검색 결과 목록에서 고를 항목 — 완전일치 → 리프일치. 그 이상은 고르지 않는다.
+
+    ★요건: 엑셀 목록 범위 밖의 카테고리는 망고 목록에 있어도 **절대** 고르지
+    않는다. 예) 엑셀="남성 신발" · 망고="브랜드 남성 신발" — 글자가 겹쳐도
+    엑셀에 없는 값이므로 매핑하지 않는다(유사도 기반 추정 선택 금지).
+    리프일치는 다단 경로의 마지막 단계가 정확히 같을 때만 허용한다
+    (예: 엑셀="패션의류잡화 > 여성신발 > 로퍼" · 망고="패션 > 여성신발 > 로퍼" —
+    표기만 다를 뿐 마지막 단계 "로퍼" 가 정확히 같다).
 
     `filter_name` 을 주면 반대 성별 항목을 먼저 걷어낸 뒤 고른다.
     """
@@ -401,8 +408,7 @@ def pick_option(
     for opt in pool:
         if leaf and norm(leaf_of(opt)) == norm(leaf):
             return opt
-    best, score = similarity_best(target, list(pool), min_score=0.0)
-    return best if score > 0 else ""
+    return ""
 
 
 # ── 화면 조작 ────────────────────────────────────────────────────
