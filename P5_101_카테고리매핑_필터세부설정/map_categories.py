@@ -967,6 +967,34 @@ def read_result_options(
             time.sleep(0.2)
 
 
+CLEAR_MARKET_CATEGORY_JS = """
+(code) => {
+  const idEl = document.getElementById('openmarket_cm_category_' + code);
+  const nameEl = document.getElementsByName('openmarket_cm_category_name_' + code)[0];
+  if (idEl) idEl.value = '';
+  if (nameEl) nameEl.value = '';
+  return true;
+}
+"""
+
+
+def clear_market_category(popup, market: str, *, progress: ProgressFn | None = None) -> None:
+    """★검증(엑셀과 완전일치) 안 된 값이 남아있지 않게 필드를 비운다.
+
+    검색만 하고 실제로 [choose_option] 으로 고르지 않으면, 결과 select
+    박스의 화면 표시는 바뀌어도 실제 저장되는 hidden 필드
+    (openmarket_cm_category_<코드>)는 그대로다 — 즉 [AI 자동 매핑] 이나
+    이전 실행이 이미 채워둔, 우리가 검증하지 않은 값이 그대로 저장될 수
+    있다. 우리 검색이 실패하면 그 값을 명시적으로 비워서, "확인 안 된
+    값이 그대로 저장"되는 사고를 막는다.
+    """
+    try:
+        popup.evaluate(CLEAR_MARKET_CATEGORY_JS, market)
+        _log(progress, f"  {MARKETS.get(market, market)}: 미확인 값 비움", major=True)
+    except Exception:
+        pass
+
+
 def choose_option(popup, market: str, label: str, *, select_id: str = "") -> bool:
     ids = [select_id] if select_id else result_select_ids(market)
     for sid in ids:
@@ -1025,28 +1053,25 @@ def map_one_market(
     retries: int = MAP_RETRIES,
     progress: ProgressFn | None = None,
 ) -> MappedItem:
-    """실패하면 다른 카테고리로 최대 `retries` 회 추가 시도한다."""
-    tried = list(exclude or [])
-    last = MappedItem(market, "", 0.0, False, "시도 없음")
-    for attempt in range(1, max(1, retries) + 1):
-        last = _map_once(
-            popup,
-            market,
-            filter_name,
-            categories,
-            variant=variant,
-            exclude=tried,
-            progress=progress,
-        )
-        if last.ok or not last.category:
-            return last
-        tried.append(last.category)
-        _log(
-            progress,
-            f"  {MARKETS.get(market, market)}: {last.reason} — 다른 카테고리로 재시도"
-            f" ({attempt}/{max(1, retries)})",
-        )
-    return last
+    """엑셀 확정 → 망고 제출을 **딱 한 번**만 한다.
+
+    ★요건: "엑셀에서는 10번이던 100번이던 네 마음대로 하고, 망고에서는
+    데이터 입력만 해(입력하기 위한 검색 1번만 허용)". 엑셀 쪽 판단(여러
+    단계 대조·재선정)은 `matching.find_category` 안에서 이미 자유롭게
+    끝난다 — 그 결과 하나를 가지고 망고에 딱 한 번만 검색·제출한다.
+    실패하면 다른 카테고리로 다시 망고를 검색하지 않고 그대로 매핑 실패
+    로 끝낸다. `retries` 인자는 하위호환을 위해 남겨두되 더 이상 쓰지
+    않는다(항상 1회).
+    """
+    return _map_once(
+        popup,
+        market,
+        filter_name,
+        categories,
+        variant=variant,
+        exclude=exclude,
+        progress=progress,
+    )
 
 
 def _map_once(
@@ -1085,11 +1110,13 @@ def _map_once(
     score = 1.0 if category else 0.0
     if not category:
         _log(progress, f"  {label}: 매칭 실패 ({step})")
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, "", 0.0, False, "유사 카테고리 없음")
     _log(progress, f"  {label}: 최적 카테고리(엑셀) = {category}  [{step}]")
 
     box = market_search_input(popup, market)
     if box is None:
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
     # ★요건: 매핑은 엑셀에서 끝낸다. 망고에서는 그 확정된 카테고리명으로
@@ -1099,13 +1126,16 @@ def _map_once(
     try:
         box.fill(keyword, timeout=T_CLICK)
     except Exception as e:  # noqa: BLE001
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
 
     if not click_market_search(popup, market):
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 버튼 미검출")
 
     options, select_id = read_result_options(popup, market)
     if not options:
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
     # 결과 목록에서는 **엑셀에서 확정한 카테고리** 와 완전히 같은 것만 그대로
@@ -1113,6 +1143,10 @@ def _map_once(
     # 추가 검사를 하지 않는다.
     picked = pick_option(options, category)
     if not picked or not choose_option(popup, market, picked, select_id=select_id):
+        # ★검증(완전일치) 안 된 값이 그대로 저장되면 안 된다 — 검색·AI자동
+        # 매핑이 채워둔 것이든 이전 실행이 남긴 것이든, 우리가 확인하지
+        # 못했으면 반드시 비운다.
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "동일한 검색결과 없음")
 
     _log(progress, f"  {label}: 선택 완료 → {picked}")
@@ -1203,7 +1237,12 @@ def map_one_row(
         pass
 
     try:
-        click_ai_mapping(popup, progress=progress)
+        # ★다시 비활성화 — [AI 자동 매핑 시작하기] 는 이번 오매핑의 근본
+        # 원인은 아니었던 것으로 보이지만, 이 버튼이 필드를 먼저 채운 뒤
+        # 우리 검색이 실패하면 "필드는 그대로"라는 게 곧 "AI 가 채운
+        # 검증 안 된 값이 그대로 저장된다"는 뜻이다. 우리 쪽에서 실패 시
+        # 필드를 명시적으로 비우기 전까지는 켜지 않는다.
+        # click_ai_mapping(popup, progress=progress)
         for market in codes:
             if stop_requested():
                 break

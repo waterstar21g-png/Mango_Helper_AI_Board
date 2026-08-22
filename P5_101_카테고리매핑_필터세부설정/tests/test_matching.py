@@ -670,11 +670,20 @@ def test_hat_filter_excludes_other_classes():
 # ── DB화 — 동떨어진 형제 품목 금지, 일반화(상위) 폴백만 허용 ──────
 
 
-def test_shoe_filter_never_falls_back_to_sibling_shoe_type():
-    """★신발 -> 구두 는 NOT-OK. 구두만 있으면 매핑하지 않는다."""
+def test_shoe_filter_avoids_sibling_shoe_type_when_alternative_exists():
+    """신발 -> 구두 는 되도록 피한다. 다른 후보(잡화)가 있으면 그걸 쓴다."""
+    cat, step = mt.find_category("남성-신발", ["구두 전용관", "남성 잡화"])
+    assert cat == "남성 잡화"
+
+
+def test_shoe_filter_falls_back_to_sibling_when_nothing_else_exists():
+    """★요건: 엑셀에서는 반드시 최종 카테고리명을 망고로 전달한다 —
+    가장 비슷한 것(형제 품목이라도) 밖에 없으면 그거라도 전달한다.
+    포기해서 아예 매핑하지 않는 것보다, 뭐라도 전달하는 것이 우선이다.
+    """
     cat, step = mt.find_category("남성-신발", ["구두 전용관"])
-    assert cat == ""
-    assert "형제 품목" in step or step == "미검출"
+    assert cat == "구두 전용관"
+    assert step.startswith("3) 최근접")
 
 
 def test_shoe_filter_falls_back_to_generic_bucket():
@@ -683,10 +692,10 @@ def test_shoe_filter_falls_back_to_generic_bucket():
     assert cat == "남성 잡화"
 
 
-def test_socks_filter_never_falls_back_to_tshirt():
-    """★양말 -> 티셔츠 는 NOT-OK. 티셔츠만 있으면 매핑하지 않는다."""
+def test_socks_filter_falls_back_to_tshirt_when_nothing_else_exists():
+    """★요건: 가장 비슷한 것(형제 품목이라도) 밖에 없으면 그거라도 전달한다."""
     cat, step = mt.find_category("남성-양말", ["남성 티셔츠 전문관"])
-    assert cat == ""
+    assert cat == "남성 티셔츠 전문관"
 
 
 def test_socks_filter_falls_back_to_other_clothing_bucket():
@@ -719,20 +728,21 @@ def test_specific_item_conflict_allows_same_target_item():
     assert mt._specific_item_conflict("남성 구두", parsed) is False
 
 
-def test_sibling_exclusion_applies_to_all_stages_not_just_nearest():
+def test_sibling_exclusion_prefers_matching_item_over_padding():
     """★실사례: '맨투맨/후드' 필터가 다른 마켓에서 '패딩'으로 새던 문제.
 
     형제 품목 배제는 3) 최근접 단계뿐 아니라 앞선 단계(2-1 등)에도 똑같이
-    적용돼야 한다. 패딩만 있으면 매핑하지 않고, 맨투맨/후드가 있으면
-    그것을 고른다.
+    적용된다 — 맨투맨/후드가 있으면 패딩을 무시하고 그것을 고른다.
     """
     with_target = ["여성의류 > 아우터 > 패딩", "여성의류 > 상의 > 맨투맨/후드"]
     cat, step = mt.find_category("여성-아우터-맨투맨/후드", with_target)
     assert cat == "여성의류 > 상의 > 맨투맨/후드"
 
+    # ★요건: 엑셀에서는 반드시 최종 카테고리명을 망고로 전달한다 —
+    # 맨투맨/후드가 전혀 없으면 가장 비슷한 것(패딩)이라도 전달한다.
     only_padding = ["여성의류 > 아우터 > 패딩"]
     cat2, step2 = mt.find_category("여성-아우터-맨투맨/후드", only_padding)
-    assert cat2 == ""
+    assert cat2 == "여성의류 > 아우터 > 패딩"
 
 
 def test_underwear_related_compound_word_not_treated_as_sibling_conflict():

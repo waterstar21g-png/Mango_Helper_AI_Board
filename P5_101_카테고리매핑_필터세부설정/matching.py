@@ -519,20 +519,22 @@ def nearest_score(parsed: "ParsedFilter", path: str) -> float:
 
 
 def nearest_category(name: str, paths: Sequence[str]) -> tuple[str, float]:
-    """규칙으로 못 찾았을 때 — 가능하면 하나를 고른다 (가장 가까운 것).
+    """규칙으로 못 찾았을 때 — **반드시** 하나를 고른다 (가장 가까운 것).
 
-    ★절대규칙: 동떨어진 형제 품목(예: 신발을 찾는데 구두로 새는 것)은 절대
-    고르지 않는다 — 성별 규칙과 동일하게, 안전한 후보가 하나도 없으면
-    빈 값을 돌려준다("오매핑보다 미매핑이 낫다"). 안전한 후보(같은 품목·
-    일반화 버킷·무관 카테고리)가 하나라도 있으면 그중에서 가장 가까운 것을
-    고른다.
+    ★요건: "엑셀에서는 반드시 최종 카테고리명을 망고로 전달해 — 가장
+    비슷한 거라도 전달해". 동떨어진 형제 품목(예: 신발을 찾는데 구두로
+    새는 것)은 되도록 피하지만, 그것 말고는 후보가 없을 때도 포기하지
+    않고 원래 후보 전체에서 가장 가까운 것을 고른다(성별은 예외 — 성별은
+    find_category 상단에서 이미 절대적으로 걸러진 뒤라 여기 들어오는
+    candidates 는 항상 성별 안전하다).
     """
     parsed = parse_filter_name(name)
     candidates = [p for p in paths if str(p or "").strip()]
     safe = [p for p in candidates if not _specific_item_conflict(p, parsed)]
+    pool = safe if safe else candidates
 
     best, best_score = "", -1.0
-    for path in safe:
+    for path in pool:
         score = nearest_score(parsed, path)
         if score > best_score or (score == best_score and best and len(path) < len(best)):
             best, best_score = path, score
@@ -750,27 +752,29 @@ def find_category(
             return "", f"성별({gender}) 조건에 맞는 카테고리 없음"
         all_paths = allowed
 
-    # ★절대규칙: "브랜드" 가 붙은 카테고리는 어떤 경우에도 확정하지 않는다.
-    #   실제 마켓 엑셀엔 정식 카테고리와 별도로 "브랜드 여성의류 > …" 처럼
-    #   브랜드관 전용 트리가 통째로 또 있는 경우가 있다 — 엑셀에 있다고
-    #   해서 그게 정답인 건 아니다. 정식(비브랜드) 카테고리가 있으면
-    #   그걸 쓰고, 그것마저 없으면 매핑하지 않는다.
+    # ★절대규칙(예외 없음): "브랜드" 가 붙은 카테고리는 어떤 경우에도
+    #   확정하지 않는다. 사용자가 엑셀에서 "브랜드" 를 직접 지운 이유가
+    #   바로 이것 — 실제 마켓 엑셀엔 정식 카테고리와 별도로 "브랜드
+    #   여성의류 > …" 처럼 브랜드관 전용 트리가 통째로 또 있는데, 엑셀에
+    #   있다고 해서 그게 정답인 게 아니다. "가장 비슷한 거라도 전달해"
+    #   원칙은 성별·브랜드 절대규칙에는 적용되지 않는다 — 그 둘을 뚫고
+    #   "가장 비슷한 것"을 억지로 만들지 않는다.
     non_brand = [p for p in all_paths if not _contains_word(p, "브랜드")]
-    if non_brand:
-        all_paths = non_brand
-    elif all_paths:
+    if not non_brand:
         return "", "브랜드 카테고리만 있음 — 매핑하지 않음"
+    all_paths = non_brand
 
-    # ★절대규칙: 동떨어진 형제 품목은 어떤 단계에서도 고르지 않는다.
+    # ★소프트규칙: 동떨어진 형제 품목은 되도록 고르지 않는다.
     #   예) "맨투맨/후드" 를 찾는데 "패딩"(같은 의류 계열의 다른 구체적
     #   품목)을 대신 고르면 안 된다. 1)~2-4) 모든 단계가 보는 후보 풀
     #   자체에서 뺀다 — 나중 단계가 all_paths 로 되돌아가도 다시 새지
-    #   않도록, 이 시점의 all_paths 를 직접 좁힌다.
+    #   않도록, 이 시점의 all_paths 를 직접 좁힌다. 다만 안전한 후보가
+    #   하나도 없으면(위와 동일한 이유로) 포기하지 않고 원래 후보로
+    #   계속 진행해 "가장 비슷한 것"을 반드시 고른다.
     if parsed.mid or parsed.lows:
         safe_paths = [p for p in all_paths if not _specific_item_conflict(p, parsed)]
-        if not safe_paths:
-            return "", "동떨어진 형제 품목만 있음 — 매핑하지 않음"
-        all_paths = safe_paths
+        if safe_paths:
+            all_paths = safe_paths
 
     # ★규칙 2·3·4 — 성별·품목명·의류 우선순위로 후보를 먼저 좁힌다
     paths, notes = constrain(all_paths, parsed)

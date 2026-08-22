@@ -232,6 +232,9 @@ class FakePopup:
 
     def evaluate(self, script, *args):
         self.asked_ids = args[0] if args else None
+        if "CLEAR_MARKET_CATEGORY" not in script and "idEl.value = ''" in script:
+            self.actions.append(("clear", args[0] if args else ""))
+            return True
         return {"texts": self.options, "id": "openmarket_category_search_list_AUC20"}
 
     def wait_for_timeout(self, ms):
@@ -255,6 +258,25 @@ def test_map_one_market_searches_mango_exactly_once(monkeypatch):
     assert fills == ["패션의류잡화 남성신발 로퍼"]  # 검색 딱 한 번, 단계는 공백으로 이음
     clicks = [a for a in popup.actions if a[0] == "click"]
     assert len(clicks) == 1
+
+
+def test_map_one_market_clears_field_when_no_exact_match(monkeypatch):
+    """★검증(완전일치) 안 된 값이 저장 전까지 그대로 남지 않게 필드를 비운다.
+
+    [AI 자동 매핑] 이나 이전 실행이 채워둔 값은, 우리가 [저장] 을 누르기
+    전까지는 의미가 없다 — 하지만 검색이 실패했을 때 그 값을 그대로 두면
+    우리가 저장을 누르는 순간 검증 안 된 값이 저장된다. 실패 시 명시적으로
+    비운다.
+    """
+    monkeypatch.setattr(mc, "T_LIST", 100)
+    target = "패션의류잡화 > 남성신발 > 로퍼"
+    popup = FakePopup(["다른 카테고리"])  # 확정값과 다름 — 완전일치 실패
+    item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발-로퍼", [target])
+
+    assert item.ok is False
+    clears = [a for a in popup.actions if a[0] == "clear"]
+    assert len(clears) == 1
+    assert clears[0][1] == "AUC20"
 
 
 def test_map_one_market_still_rejects_categories_outside_excel(monkeypatch):
@@ -296,21 +318,24 @@ def test_map_one_market_no_search_result(monkeypatch):
     assert item.reason.startswith("검색 결과 없음")
 
 
-def test_map_retries_three_times_with_other_categories(monkeypatch):
-    """★요건: 실패하면 다른 카테고리로 최대 3회 추가 시도."""
+def test_map_one_market_touches_mango_exactly_once(monkeypatch):
+    """★요건: "엑셀에서는 몇 번이든 마음대로, 망고에서는 검색 1번만 허용".
+
+    실패해도 다른 카테고리로 망고를 다시 검색하지 않는다 — map_one_market
+    은 _map_once 를 정확히 한 번만 호출하는 얇은 래퍼다.
+    """
     monkeypatch.setattr(mc, "T_LIST", 100)
-    tried: list[str] = []
+    calls: list[str] = []
 
     def fake_once(popup, market, name, cats, *, variant="", exclude=(), progress=None):
         cat, _ = mc.best_category_with_step(name, cats, exclude=exclude)
-        tried.append(cat)
+        calls.append(cat)
         return mc.MappedItem(market, cat, 1.0, False, "목록 선택 실패")
 
     monkeypatch.setattr(mc, "_map_once", fake_once)
     item = mc.map_one_market(FakePopup([]), "AUC20", "남성 비니", AUCTION)
     assert item.ok is False
-    assert len(tried) == mc.MAP_RETRIES == 3
-    assert len(set(tried)) == 3   # 매번 다른 카테고리
+    assert len(calls) == 1        # 망고 접촉(=_map_once 호출) 딱 1회
 
 
 # ── 목록 행 파싱 ─────────────────────────────────────────────────
