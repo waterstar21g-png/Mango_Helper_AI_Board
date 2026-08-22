@@ -357,76 +357,35 @@ def best_category_with_step(
 
 
 def search_keyword_for(category_path: str) -> str:
-    """카테고리 검색필드에 넣을 검색어 — 마지막 단계."""
-    return leaf_of(category_path)
+    """카테고리 검색필드에 넣을 검색어 — ★확정된 카테고리명 전체.
 
-
-def gender_safe_options(options: Sequence[str], filter_name: str) -> list[str]:
-    """★검색 결과에도 성별 규칙을 적용한다.
-
-    검색어는 카테고리의 마지막 단계(예 `로퍼`) 뿐이라, 망고는 `남성신발 > 로퍼` 와
-    `여성신발 > 로퍼` 를 함께 돌려준다. 성별을 보지 않으면 목록에 먼저 나온 반대 성별
-    항목이 뽑히므로, 여기서 반대 성별을 걷어내고 같은 성별을 우선한다.
-    반대 성별만 남으면 빈 목록을 돌려 매핑하지 않게 한다.
+    ★요건: 엑셀은 망고 마켓별 전체 카테고리를 그대로 내려받은 것이라,
+    엑셀에서 확정한 값은 망고에도 100% 존재한다. 검색어를 리프(마지막
+    단계) 하나만 넣으면 같은 리프를 쓰는 다른 상위 카테고리까지 여러 개
+    걸려 나온다 — 확정된 전체 이름으로 검색해야 그 마켓 안에서 유일하게
+    하나만 나온다. 망고에서는 검색·선택이 아니라 확정된 값을 그대로
+    "제출"하는 것뿐이다.
     """
-    pool = [o for o in options if str(o or "").strip()]
-    gender = matching.gender_of(filter_name)
-    if not gender:
-        return pool
-    safe = matching.strip_opposite_gender(pool, gender)
-    if not safe:
-        return []
-    same = [o for o in safe if matching.has_gender(o, gender)]
-    return same or safe
+    return str(category_path or "").strip()
 
 
-# ★엑셀에서 의도적으로 지운 말들 — 리프만 같다고 이 말이 붙은 망고 옵션을
-# 대신 고르면 안 된다. 예) 엑셀엔 "브랜드" 가 전혀 없는데 망고 옵션
-# "브랜드 여성의류 > 점퍼 > 패딩/다운점퍼" 가 리프("패딩/다운점퍼")만 같다고
-# 선택되면, 화면엔 "엑셀에 없는 브랜드 카테고리"가 그대로 반영돼 버린다.
-EXCLUDED_UPPER_WORDS = ("브랜드",)
+def pick_option(options: Sequence[str], category_path: str) -> str:
+    """검색 결과 목록에서 고를 항목 — **완전일치(동일한 것)만** 고른다.
 
-
-def _has_excluded_word_not_in_target(opt: str, target: str) -> bool:
-    """opt 에 EXCLUDED_UPPER_WORDS 의 말이 있는데 target(엑셀 확정값)엔 없으면 True."""
-    opt_n = "".join(str(opt or "").split())
-    target_n = "".join(str(target or "").split())
-    return any(w in opt_n and w not in target_n for w in EXCLUDED_UPPER_WORDS)
-
-
-def pick_option(
-    options: Sequence[str], category_path: str, filter_name: str = ""
-) -> str:
-    """검색 결과 목록에서 고를 항목 — 완전일치 → 리프일치. 그 이상은 고르지 않는다.
-
-    ★요건: 엑셀 목록 범위 밖의 카테고리는 망고 목록에 있어도 **절대** 고르지
-    않는다. 예) 엑셀="남성 신발" · 망고="브랜드 남성 신발" — 글자가 겹쳐도
-    엑셀에 없는 값이므로 매핑하지 않는다(유사도 기반 추정 선택 금지).
-    리프일치는 다단 경로의 마지막 단계가 정확히 같을 때만 허용한다
-    (예: 엑셀="패션의류잡화 > 여성신발 > 로퍼" · 망고="패션 > 여성신발 > 로퍼" —
-    표기만 다를 뿐 마지막 단계 "로퍼" 가 정확히 같다).
-
-    ★상위 계층에 사용자가 엑셀에서 일부러 지운 말(EXCLUDED_UPPER_WORDS,
-    예: "브랜드")이 있으면, 리프가 같아도 고르지 않는다 — 리프일치는 표기
-    차이를 허용하려는 것이지, 엑셀에 없는 상위 분류를 끌고 오려는 게 아니다.
-
-    `filter_name` 을 주면 반대 성별 항목을 먼저 걷어낸 뒤 고른다.
+    ★요건 원문: "리스트에서 동일한 것을 선택해 (여기서 다른 로직을 구사하지
+    말고) 오직 [엑셀에서] 확정한 것만 선택하라". 성별·계열·형제품목 같은
+    판단은 엑셀 검색 단계(matching.find_category)에서 전부 끝났다 — 망고
+    쪽(이 함수)은 그 확정값과 **완전히 같은** 결과만 그대로 반영하는
+    기계적 동작만 한다. 성별 재검사·리프일치·유사도 같은 추가 판단 로직은
+    여기 두지 않는다. 완전히 같은 게 없으면 그 마켓은 매핑하지 않는다
+    (오매핑보다 미매핑).
     """
     target = str(category_path or "").strip()
     if not target:
         return ""
-    pool = gender_safe_options(options, filter_name) if filter_name else list(options)
-    if not pool:
-        return ""
     norm = lambda s: "".join(str(s or "").split())  # noqa: E731
-    for opt in pool:
-        if norm(opt) == norm(target):
-            return opt
-    leaf = leaf_of(target)
-    for opt in pool:
-        if leaf and norm(leaf_of(opt)) == norm(leaf):
-            if _has_excluded_word_not_in_target(opt, target):
-                continue
+    for opt in options:
+        if str(opt or "").strip() and norm(opt) == norm(target):
             return opt
     return ""
 
@@ -1143,18 +1102,12 @@ def _map_once(
     if not options:
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
-    # 결과 목록에서는 **엑셀에서 확정한 카테고리** 와 같은 것만 그대로 선택한다
-    # (필터명은 성별 판정용) — 다른 판단 로직을 추가하지 않는다.
-    picked = pick_option(options, category, filter_name)
-    if not picked and matching.gender_of(filter_name):
-        gender = matching.gender_of(filter_name)
-        _log(progress, f"  {label}: 성별({gender}) 조건에 맞는 검색결과 없음", major=True)
-        return MappedItem(market, category, score, False, f"성별({gender}) 검색결과 없음")
-    if picked and matching.violates_gender(picked, filter_name):
-        _log(progress, f"  {label}: 반대 성별 결과 배제 → {picked}", major=True)
-        return MappedItem(market, category, score, False, "반대 성별 검색결과만 있음")
+    # 결과 목록에서는 **엑셀에서 확정한 카테고리** 와 완전히 같은 것만 그대로
+    # 선택한다 — 성별·계열 등 판단은 이미 엑셀 단계에서 끝났으므로 여기서는
+    # 추가 검사를 하지 않는다.
+    picked = pick_option(options, category)
     if not picked or not choose_option(popup, market, picked, select_id=select_id):
-        return MappedItem(market, category, score, False, "목록 선택 실패")
+        return MappedItem(market, category, score, False, "동일한 검색결과 없음")
 
     _log(progress, f"  {label}: 선택 완료 → {picked}")
     return MappedItem(market, picked, score, True, step)

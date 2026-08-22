@@ -56,95 +56,51 @@ def test_best_category_always_returns_one():
     assert score > 0
 
 
-def test_search_keyword_is_leaf():
-    assert mc.search_keyword_for("A > B > 비니") == "비니"
+def test_search_keyword_is_full_confirmed_name():
+    """★요건: 검색어는 리프 하나가 아니라 확정된 카테고리명 전체다.
+
+    엑셀은 망고 전체 카테고리를 그대로 내려받은 것이라, 확정값 전체로
+    검색해야 그 마켓 안에서 유일하게 하나만 걸린다. 리프 하나("비니")만
+    쓰면 같은 리프를 쓰는 다른 상위 카테고리까지 걸려 여러 개가 나온다.
+    """
+    assert mc.search_keyword_for("A > B > 비니") == "A > B > 비니"
+    assert mc.search_keyword_for("  A > B  ") == "A > B"
+    assert mc.search_keyword_for("") == ""
 
 
-def test_pick_option_exact_then_leaf():
-    options = [
-        "패션잡화 > 모자 > 비니",
-        "패션의류/잡화 > 남성패션 > 남성잡화 > 모자 > 비니",
-    ]
+def test_pick_option_exact_match_only():
+    """★요건 원문: "리스트에서 동일한 것을 선택해 (다른 로직을 구사하지 말고)
+    오직 [엑셀에서] 확정한 것만 선택하라".
+
+    완전일치(공백 무시)만 고른다. 성별·계열·리프일치·유사도 같은 판단은
+    전부 엑셀 검색 단계(matching.find_category)에서 끝나야 하고, 여기서는
+    추가 로직 없이 확정값과 완전히 같은 것만 그대로 반영한다.
+    """
     target = "패션의류/잡화 > 남성패션 > 남성잡화 > 모자 > 비니"
-    assert mc.pick_option(options, target) == target          # 완전일치
-    assert mc.pick_option(["잡화 > 모자 > 비니"], target).endswith("비니")  # 리프일치
+    options = ["패션잡화 > 모자 > 비니", target]
+    assert mc.pick_option(options, target) == target           # 완전일치
     assert mc.pick_option([], target) == ""
 
 
-# ── 검색 결과 선택의 성별 구분 ────────────────────────────────────
+def test_pick_option_rejects_anything_not_identical():
+    """★리프만 같거나(다른 상위 표기) 글자가 겹치는 것은 전부 거부한다.
 
-
-def test_pick_option_keeps_gender_on_leaf_match():
-    """★여성 필터가 `남성신발 > 로퍼` 로 매칭되던 문제.
-
-    검색어는 리프(`로퍼`)뿐이라 망고가 남성·여성을 함께 돌려주는데, 예전에는
-    리프만 같으면 목록에 먼저 나온 남성 항목을 골랐다.
+    엑셀="남성 신발" · 망고="브랜드 남성 신발"/"패션 > 여성신발 > 로퍼"류의
+    "표기만 다른" 근접 매칭은 이제 전혀 허용하지 않는다 — 완전일치가
+    아니면 그 마켓은 매핑하지 않는다(오매핑보다 미매핑).
     """
-    name = "아름트리-무신사-여성-신발-로퍼"
-    target = "패션의류잡화 > 여성신발 > 로퍼"
-    options = ["패션 > 남성신발 > 로퍼", "패션 > 여성신발 > 로퍼"]
-
-    assert mc.pick_option(options, target, name) == "패션 > 여성신발 > 로퍼"
-    # 필터명을 주지 않으면 예전 동작(리프 우선) 그대로 — 하위호환
-    assert mc.pick_option(options, target) == "패션 > 남성신발 > 로퍼"
+    assert mc.pick_option(["브랜드 남성 신발"], "남성 신발") == ""
+    assert mc.pick_option(["패션 > 여성신발 > 로퍼"], "패션의류잡화 > 여성신발 > 로퍼") == ""
+    assert mc.pick_option(["여성신발 > 로퍼", "남성신발 > 로퍼"], "패션의류잡화 > 남성신발 > 로퍼") == ""
+    assert mc.pick_option(["아동 신발", "잡화 신발 액세서리", "신발끈"], "남성 신발") == ""
 
 
-def test_pick_option_no_pick_when_only_opposite_gender():
-    """반대 성별만 있으면 고르지 않는다 (오매핑보다 미매핑이 낫다)."""
-    name = "아름트리-무신사-여성-신발-로퍼"
-    target = "패션의류잡화 > 여성신발 > 로퍼"
-    assert mc.pick_option(["패션 > 남성신발 > 로퍼"], target, name) == ""
+def test_pick_option_has_no_gender_prefilter():
+    """★망고 쪽에는 성별 등 추가 판단 로직을 두지 않는다 — 함수가 필터명을 받지 않는다."""
+    import inspect
 
-
-def test_pick_option_allows_genderless_option():
-    """성별 표기가 없는 항목은 남긴다 (마켓 대부분이 성별 없는 경로)."""
-    name = "아름트리-무신사-여성-신발-로퍼"
-    target = "패션의류잡화 > 여성신발 > 로퍼"
-    assert mc.pick_option(["패션 > 신발 > 로퍼"], target, name) == "패션 > 신발 > 로퍼"
-
-
-# ── 엑셀 범위 밖 카테고리는 절대 선택하지 않는다 (요건) ────────────
-
-
-def test_pick_option_never_picks_category_outside_excel_list():
-    """★엑셀="남성 신발" · 망고="브랜드 남성 신발" — 글자가 겹쳐도 고르지 않는다.
-
-    예전에는 유사도 기반 3단계 폴백이 있어 이런 식으로 겹치기만 하면
-    엑셀에 없는 카테고리를 멋대로 골랐다. 이제 완전일치·리프일치가 아니면
-    아예 고르지 않는다(빈 문자열 반환) — 오매핑보다 미매핑이 낫다.
-    """
-    assert mc.pick_option(["브랜드 남성 신발"], "남성 신발", "아름트리-무신사-남성-신발") == ""
-    assert mc.pick_option(["남성 신발 브랜드관"], "남성 신발") == ""
-    assert mc.pick_option(["신발 남성 브랜드"], "남성 신발") == ""
-
-
-def test_pick_option_still_allows_leaf_match_for_multilevel_paths():
-    """다단 경로에서 마지막 단계(리프)가 정확히 같으면 표기 차이는 허용한다.
-
-    엑셀="패션의류잡화 > 여성신발 > 로퍼" · 망고="패션 > 여성신발 > 로퍼" —
-    마지막 단계 "로퍼" 가 정확히 같으므로(다른 겹치는 글자로 추정하지 않음)
-    이건 허용한다. 위 '브랜드 남성 신발' 사례와 다른 점은, 이 경로는 실제로
-    ">" 로 나뉜 마지막 단계가 정확히 일치한다는 것이다.
-    """
-    assert (
-        mc.pick_option(["패션 > 여성신발 > 로퍼"], "패션의류잡화 > 여성신발 > 로퍼")
-        == "패션 > 여성신발 > 로퍼"
-    )
-
-
-def test_pick_option_no_similarity_fallback_left():
-    """유사도 기반 추정 선택이 남아 있지 않은지 — 애매하면 반드시 빈 문자열."""
-    # "신발"이라는 공통 단어만 있고 리프/완전일치가 아닌 경우 전부 거부.
-    options = ["아동 신발", "잡화 신발 액세서리", "신발끈"]
-    assert mc.pick_option(options, "남성 신발") == ""
-
-
-def test_gender_safe_options_prefers_same_gender():
-    name = "아름트리-무신사-남성-신발-로퍼"
-    options = ["여성신발 > 로퍼", "신발 > 로퍼", "남성신발 > 로퍼"]
-    assert mc.gender_safe_options(options, name) == ["남성신발 > 로퍼"]
-    # 성별을 알 수 없는 필터명이면 그대로 둔다
-    assert mc.gender_safe_options(options, "브랜드-사이트-로퍼") == options
+    params = list(inspect.signature(mc.pick_option).parameters)
+    assert params == ["options", "category_path"]
 
 
 # ── 엑셀 로딩 ────────────────────────────────────────────────────
@@ -279,19 +235,20 @@ class FakePopup:
 
 
 def test_map_one_market_searches_mango_exactly_once(monkeypatch):
-    """★요건: 매핑은 엑셀에서 끝낸다. 망고에서는 확정된 카테고리명으로
-    딱 한 번만 검색하고 결과를 그대로 반영한다 — 여러 검색어로 재시도하지
-    않는다.
+    """★요건: 매핑은 엑셀에서 끝낸다. 엑셀은 망고 카테고리 전체를 그대로
+    내려받은 것이라, 확정된 값은 망고에도 100% 있다. 망고에서는 그 확정된
+    이름 **전체**로 딱 한 번만 검색하고, 완전히 같은 결과를 그대로 반영한다
+    — 리프만으로 검색해 여러 후보 중 고르는 것이 아니다.
     """
     monkeypatch.setattr(mc, "T_LIST", 200)
     target = "패션의류잡화 > 남성신발 > 로퍼"
-    popup = FakePopup(["패션 > 남성신발 > 로퍼"])
+    popup = FakePopup([target])  # 엑셀=망고 이므로 완전히 같은 값이 그대로 있다
     item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발-로퍼", [target])
 
     assert item.ok is True
-    assert item.category == "패션 > 남성신발 > 로퍼"
+    assert item.category == target
     fills = [a[2] for a in popup.actions if a[0] == "fill"]
-    assert fills == ["로퍼"]              # 검색 딱 한 번, 검색어=리프 그대로
+    assert fills == [target]              # 검색 딱 한 번, 검색어=확정값 전체
     clicks = [a for a in popup.actions if a[0] == "click"]
     assert len(clicks) == 1
 
@@ -316,7 +273,7 @@ def test_map_one_market_full_sequence():
     assert item.category == target
     kinds = [a[0] for a in popup.actions]
     assert kinds == ["fill", "click", "select"]      # 입력 → 검색 → 선택
-    assert popup.actions[0][2] == "비니"              # 검색어 = 리프
+    assert popup.actions[0][2] == target              # 검색어 = 확정값 전체
     assert popup.actions[1][1] == "searchbtn_AUC20"
     assert popup.actions[2][2] == target
 
@@ -1074,26 +1031,20 @@ def test_open_setting_popup_reuses_tab_when_popup_event_missed():
     assert len(page.context.pages) == 2
 
 
-# ── 엑셀에서 지운 말(브랜드)이 리프일치를 뚫고 새지 않게 ───────────
+# ── "브랜드" 등 확정값에 없는 말이 붙은 옵션 — 완전일치라 자동 배제됨 ──
 
 
-def test_pick_option_rejects_excluded_word_even_on_leaf_match():
-    """★엑셀에 없는 '브랜드' 가 상위에 붙은 옵션은 리프만 같아도 고르지 않는다.
+def test_pick_option_naturally_rejects_brand_wrapped_option():
+    """★엑셀에 없는 '브랜드' 가 상위에 붙은 옵션은 완전일치가 아니므로 자동으로
+    거부된다 — 이걸 위한 별도 로직(EXCLUDED_UPPER_WORDS 등)은 필요 없다.
 
-    실사례: 엑셀엔 '브랜드' 가 전혀 없는데(사용자가 지움), 리프만 같은
-    망고 옵션 '브랜드 여성의류 > 점퍼 > 패딩/다운점퍼' 가 그대로 선택돼
-    화면에 반영됐다.
+    실사례: 엑셀엔 '브랜드' 가 전혀 없는데(사용자가 지움), 리프만 같은 망고
+    옵션 '브랜드 여성의류 > 점퍼 > 패딩/다운점퍼' 가 예전에는 리프일치로
+    그대로 선택돼 화면에 반영됐다. 완전일치만 쓰면 이 문제 자체가 없다.
     """
     target = "여성의류 > 아우터 > 패딩/다운점퍼"
     bad = "브랜드 여성의류 > 점퍼 > 패딩/다운점퍼"
-    good = "여성의류 > 점퍼 > 패딩/다운점퍼"
+    good = target
     assert mc.pick_option([bad], target) == ""
     assert mc.pick_option([good], target) == good
     assert mc.pick_option([bad, good], target) == good
-
-
-def test_pick_option_allows_excluded_word_when_target_also_has_it():
-    """엑셀 확정값에 '브랜드' 가 이미 있으면(사용자가 남겨둔 경우) 막지 않는다."""
-    target = "브랜드 여성의류 > 점퍼 > 패딩"
-    opt = "브랜드 여성의류 > 점퍼 > 패딩"
-    assert mc.pick_option([opt], target) == opt
