@@ -659,7 +659,17 @@ def reveal(page, *, progress: ProgressFn | None = None) -> None:
 
 
 def open_setting_popup(page, row: RowInfo, *, list_url: str, progress: ProgressFn | None = None):
-    """행의 [설정수정] → 팝업. 실패 시 팝업 URL 직접 오픈."""
+    """행의 [설정수정] → 팝업. 실패 시 팝업 URL 직접 오픈.
+
+    ★같은 버튼을 두 번 클릭해 팝업을 두 개 띄우지 않는다 — expect_popup 이
+    타이밍상 이벤트를 놓치면(실제로는 창이 열렸는데 감지만 실패) 곧바로
+    URL 직접열기(새 탭)로 넘어가 진짜 팝업이 2개가 됐다. 예외가 나면 먼저
+    새로 열린 탭이 있는지 확인해 그걸 쓴다.
+    """
+    try:
+        before = set(page.context.pages)
+    except Exception:
+        before = set()
     sel = f"a[onclick*=\"{SETTING_EDIT_JS}('{row.ftid}')\"]"
     try:
         loc = page.locator(sel).first
@@ -671,7 +681,15 @@ def open_setting_popup(page, row: RowInfo, *, list_url: str, progress: ProgressF
             _log(progress, f"  설정수정 팝업 (ftid={row.ftid})")
             return popup
     except Exception:
-        pass
+        try:
+            new_pages = [p for p in page.context.pages if p not in before]
+        except Exception:
+            new_pages = []
+        if new_pages:
+            popup = new_pages[-1]
+            reveal(popup, progress=progress)
+            _log(progress, f"  설정수정 팝업 감지(지연) (ftid={row.ftid})")
+            return popup
 
     url = build_mapping_url(row.ftid, list_url=list_url)
     try:

@@ -309,10 +309,21 @@ def open_setting_popup(page, ftid: str, *, list_url: str = "", progress: Progres
     ★프레임을 돌 때 버튼이 **있는지 먼저 즉시 확인**(count, 대기 없음)하고,
     있는 프레임에서만 클릭+팝업대기 를 시도한다. 관계없는 프레임(광고 iframe 등)
     까지 매번 클릭을 시도하면 없는 요소를 T_CLICK·T_NAV 만큼씩 헛기다리게 된다.
+
+    ★같은 버튼을 두 번 클릭해 팝업을 두 개 띄우지 않는다 — `expect_popup()` 이
+    타이밍상 이벤트를 놓치면(실제로는 창이 열렸는데 감지만 실패) 예외로 넘어가
+    다음 컨텍스트에서 **같은 버튼을 또 클릭**했다. 그러면 실제 화면에는 진짜
+    팝업 2개가 뜨고, 첫 팝업은 아무도 처리하지 않은 채 남는다. 이제 예외가 나면
+    먼저 새로 열린 탭이 있는지 확인해 그걸 쓰고, 없을 때만 다음 컨텍스트로
+    넘어가 다시 클릭한다.
     """
     ftid = str(ftid or "").strip()
     if ftid:
         sel = f"a[onclick*=\"{SETTING_EDIT_JS}('{ftid}')\"]"
+        try:
+            before = set(page.context.pages)
+        except Exception:
+            before = set()
         for ctx in p3opt.contexts(page):
             try:
                 loc = ctx.locator(sel).first
@@ -325,6 +336,21 @@ def open_setting_popup(page, ftid: str, *, list_url: str = "", progress: Progres
                 _log(progress, f"  [{SETTING_EDIT_LABEL}] 팝업 열림 (ftid={ftid})")
                 return popup
             except Exception:
+                # 클릭은 실제로 성공해 창이 열렸는데 expect_popup 이 놓쳤을 수
+                # 있다 — 새 탭이 실제로 생겼으면 그걸 쓰고, 같은 버튼을 다시
+                # 클릭(=팝업 중복)하지 않는다.
+                try:
+                    new_pages = [p for p in page.context.pages if p not in before]
+                except Exception:
+                    new_pages = []
+                if new_pages:
+                    popup = new_pages[-1]
+                    reveal(popup, progress=progress)
+                    _log(
+                        progress,
+                        f"  [{SETTING_EDIT_LABEL}] 팝업 감지(지연) (ftid={ftid})",
+                    )
+                    return popup
                 continue
 
     url = build_popup_url(list_url, ftid) if ftid else ""

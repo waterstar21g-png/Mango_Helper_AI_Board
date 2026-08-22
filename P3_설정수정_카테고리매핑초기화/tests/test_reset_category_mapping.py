@@ -111,6 +111,70 @@ def test_open_setting_popup_checks_count_before_click(monkeypatch):
     assert dead1.count_calls >= 1     # 존재 확인은 했다 (대기 없이)
 
 
+class OnceClickContext:
+    """클릭하면 실제 새 탭이 생기지만, expect_popup 이벤트는 놓친 것처럼 흉내낸다."""
+
+    def __init__(self, page_context):
+        self.page_context = page_context
+        self.click_calls = 0
+
+    def locator(self, selector):
+        return self
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return 1
+
+    def click(self, timeout=None):
+        self.click_calls += 1
+        self.page_context.pages.append(object())  # 실제로는 새 탭이 열렸다
+
+
+class MissedPopupCtx:
+    """expect_popup() 의 with 블록 — 이벤트를 못 잡은 것처럼 예외를 던진다."""
+
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        raise TimeoutError("팝업 이벤트 놓침")
+
+
+class FakeContext:
+    def __init__(self):
+        self.pages: list = []
+
+
+class FakePageWithContext:
+    def __init__(self):
+        self.context = FakeContext()
+        self.context.pages.append(self)
+
+    def expect_popup(self, timeout=None):
+        return MissedPopupCtx()
+
+
+def test_open_setting_popup_reuses_tab_when_popup_event_missed(monkeypatch):
+    """★expect_popup 이 이벤트를 놓쳐도 같은 버튼을 두 번 클릭하지 않는다.
+
+    실제로는 창이 열렸는데 감지만 실패한 경우 — 새로 생긴 탭을 찾아 그걸
+    쓰고, 같은 [설정수정] 버튼을 다시 눌러 팝업을 하나 더 띄우지 않는다.
+    (실사이트에서 팝업 2개가 번갈아 뜨던 원인)
+    """
+    page = FakePageWithContext()
+    ctx = OnceClickContext(page.context)
+    monkeypatch.setattr(rcm.p3opt, "contexts", lambda p: [ctx])
+
+    popup = rcm.open_setting_popup(page, "670", list_url="https://x/list.php")
+
+    assert ctx.click_calls == 1                  # 딱 한 번만 클릭
+    assert popup is page.context.pages[-1]        # 새로 생긴 탭을 그대로 사용
+    assert len(page.context.pages) == 2            # page 원본 + 새 탭 1개뿐
+
+
 def test_build_popup_url_from_list_url():
     url = rcm.build_popup_url(LIST_URL, "670")
     assert url.startswith("https://tmg1898.cafe24.com/mall/admin/admin_category_set.php")

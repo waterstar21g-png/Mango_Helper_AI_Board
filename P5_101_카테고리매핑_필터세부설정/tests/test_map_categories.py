@@ -913,3 +913,63 @@ def test_reveal_does_not_raise_on_failure():
             raise RuntimeError("창 없음")
 
     mc.reveal(FailingPage())  # 예외 없이 넘어가야 한다
+
+
+# ── 설정수정 팝업 — 이벤트를 놓쳐도 같은 버튼을 두 번 클릭하지 않는다 ──
+
+
+class _OnceClickLoc:
+    def __init__(self, page_context):
+        self.page_context = page_context
+        self.click_calls = 0
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return 1
+
+    def click(self, timeout=None):
+        self.click_calls += 1
+        self.page_context.pages.append(object())  # 실제로는 새 탭이 열렸다
+
+
+class _MissedPopupCtx:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        raise TimeoutError("팝업 이벤트 놓침")
+
+
+class _FakeContext:
+    def __init__(self):
+        self.pages: list = []
+
+
+class _FakePageForPopup:
+    def __init__(self, loc):
+        self.context = _FakeContext()
+        self.context.pages.append(self)
+        self._loc = loc
+
+    def locator(self, selector):
+        return self._loc
+
+    def expect_popup(self, timeout=None):
+        return _MissedPopupCtx()
+
+
+def test_open_setting_popup_reuses_tab_when_popup_event_missed():
+    """★expect_popup 이 이벤트를 놓쳐도 [설정수정] 을 두 번 클릭하지 않는다."""
+    page = _FakePageForPopup(None)
+    loc = _OnceClickLoc(page.context)
+    page._loc = loc
+
+    row = mc.RowInfo(index=0, ftid="670", filter_name="f")
+    popup = mc.open_setting_popup(page, row, list_url="https://x/list.php")
+
+    assert loc.click_calls == 1
+    assert popup is page.context.pages[-1]
+    assert len(page.context.pages) == 2
