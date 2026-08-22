@@ -463,13 +463,25 @@ def _specific_item_conflict(path: str, parsed: "ParsedFilter") -> bool:
     # 뿐이라(예: "속옷/홈웨어 > 여성 속옷 상의" 의 "홈웨어"), 리프가 실제
     # 품목을 정확히 담고 있다.
     leaf = leaf_of(path)
+
+    # ★먼저 리프에 찾는 것과 관련된 구체품목명이 있는지부터 확인한다.
+    # "정장샌들" 처럼 리프 하나에 무관 단어("정장"=의류)와 관련 단어
+    # ("샌들"=신발)가 같이 있을 수 있다 — 관련 단어가 하나라도 있으면
+    # 무관 단어가 섞여 있어도 형제 충돌로 보지 않는다.
+    for words in SPECIFIC_ITEM_WORDS.values():
+        for w in words:
+            if _contains_word(leaf, w):
+                nw = normalize(w)
+                if any(nw in want or want in nw for want in wanted):
+                    return False  # 찾는 것과 관련된 품목이 리프에 있음 — 형제 아님
+
     for words in SPECIFIC_ITEM_WORDS.values():
         for w in words:
             if not _contains_word(leaf, w):
                 continue
             nw = normalize(w)
             if any(nw in want or want in nw for want in wanted):
-                continue  # 찾는 것과 관련된 품목 — 형제 아님
+                continue  # (위에서 이미 처리 — 여기 도달하면 무관 단어)
             return True
     return False
 

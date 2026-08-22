@@ -780,3 +780,27 @@ def test_find_category_brand_exclusion_applies_regardless_of_gender():
     cats = ["브랜드 캐쥬얼의류 > 티셔츠/셔츠 > 맨투맨/후드"]
     cat, step = mt.find_category("아우터-맨투맨", cats)
     assert cat == ""
+
+
+def test_specific_item_conflict_leaf_with_mixed_words_is_not_conflict():
+    """★실사례(옥션2.0): '정장샌들' 처럼 리프 하나에 무관 단어("정장"=의류)와
+    관련 단어("샌들"=신발)가 같이 있으면, 관련 단어가 있으므로 형제 충돌로
+    보지 않는다.
+    """
+    parsed = mt.parse_filter_name("남성-신발-샌들")
+    assert mt._specific_item_conflict("신발 > 남성샌들 > 정장샌들", parsed) is False
+
+
+def test_find_category_picks_sandal_leaf_over_unrelated_leaf_in_same_group():
+    """★실사례(옥션2.0 데이터): '샌들' 필터가 '정장샌들'을 정확히 고른다 —
+    이전에는 '정장'(의류) 단어 때문에 잘못 배제돼 '아쿠아슈즈'가 선택됐다.
+    """
+    cats = [
+        "신발 > 기능화 > 간호사화",
+        "신발 > 남성샌들 > 아쿠아슈즈",
+        "신발 > 남성샌들 > 정장샌들",
+        "신발 > 남성샌들 > 쪼리/슬리퍼",
+        "신발 > 남성샌들 > 캐주얼샌들",
+    ]
+    cat, step = mt.find_category("남성-신발-샌들", cats)
+    assert cat == "신발 > 남성샌들 > 정장샌들"
