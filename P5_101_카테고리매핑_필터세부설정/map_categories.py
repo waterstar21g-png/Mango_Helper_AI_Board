@@ -419,6 +419,49 @@ def _first(page, selectors: Iterable[str]):
     return None
 
 
+SITE_OPTIONS_JS = "(el) => Array.from(el.options).map(o => (o.textContent || '').trim())"
+
+
+def _norm_site(text: str) -> str:
+    """사이트명 비교용 — 공백 제거 + 소문자."""
+    return "".join(str(text or "").split()).lower()
+
+
+def match_site_option(options: Sequence[str], wanted: str) -> str | None:
+    """입력한 사이트명을 실제 옵션에 맞춘다.
+
+    정확 일치 → 대소문자·공백 무시 → 부분 포함. `MUSINSA.COM` 처럼 대소문자가
+    다르게 입력돼도 `MUSINSA.com` 옵션을 찾아낸다.
+    """
+    want = str(wanted or "").strip()
+    if not want:
+        return None
+    for opt in options:
+        if opt == want:
+            return opt
+    nw = _norm_site(want)
+    for opt in options:
+        if _norm_site(opt) == nw:
+            return opt
+    for opt in options:
+        no = _norm_site(opt)
+        if nw and no and (nw in no or no in nw):
+            return opt
+    return None
+
+
+def read_site_options(page) -> list[str]:
+    """상품수집사이트 드롭다운의 옵션 텍스트 목록."""
+    loc = _first(page, ('select[name="site_id"]',))
+    if loc is None:
+        return []
+    try:
+        raw = loc.evaluate(SITE_OPTIONS_JS) or []
+    except Exception:
+        return []
+    return [str(t).strip() for t in raw if str(t).strip()]
+
+
 def select_site(page, site_id: str, *, progress: ProgressFn | None = None) -> bool:
     """상품수집사이트 리스트박스 선택 (초기 1회)."""
     if not site_id:
@@ -427,17 +470,33 @@ def select_site(page, site_id: str, *, progress: ProgressFn | None = None) -> bo
     if loc is None:
         _log(progress, "오류: 상품수집사이트 드롭다운 미검출", major=True)
         return False
+
+    options = read_site_options(page)
+    target = match_site_option(options, site_id) if options else site_id
+    if target is None:
+        _log(
+            progress,
+            f"오류: 상품수집사이트 미검출 · 입력={site_id} · 화면목록={options}",
+            major=True,
+        )
+        return False
+
     for how in ("label", "value"):
         try:
             if how == "label":
-                loc.select_option(label=site_id, timeout=T_CLICK)
+                loc.select_option(label=target, timeout=T_CLICK)
             else:
-                loc.select_option(site_id, timeout=T_CLICK)
-            _log(progress, f"상품수집사이트: {site_id}", major=True)
+                loc.select_option(target, timeout=T_CLICK)
+            note = "" if target == site_id else f" (입력 {site_id} → 화면 {target})"
+            _log(progress, f"상품수집사이트: {target}{note}", major=True)
             return True
         except Exception:
             continue
-    _log(progress, f"오류: 상품수집사이트 선택 실패 · {site_id}", major=True)
+    _log(
+        progress,
+        f"오류: 상품수집사이트 선택 실패 · {target} · 화면목록={options}",
+        major=True,
+    )
     return False
 
 
@@ -540,13 +599,27 @@ def diagnose_list(page, *, progress: ProgressFn | None = None) -> None:
             continue
         _log(
             progress,
-            f"  [진단] 프레임{i} url={str(info.get('url'))[:80]}"
-            f" · tr={info.get('rows')} · 체크박스={info.get('checkboxes')}"
+            f"  [진단] 프레임{i} tr={info.get('rows')}"
+            f" · 체크박스={info.get('checkboxes')}"
             f" · 설정수정링크={info.get('mappingLinks')}"
             f" · search_category={info.get('table')}"
             f" · 예시={info.get('sample')}",
             major=True,
         )
+        # URL 은 잘리면 원인 파악이 안 되므로 통째로 남긴다
+        _log(progress, f"  [진단] 프레임{i} url={info.get('url')}", major=True)
+        if int(info.get("rows") or 0) == 0 and not info.get("table"):
+            _log(
+                progress,
+                "  [진단] 이 화면에는 목록 표가 아예 없습니다 — 「작업 URL」 이"
+                " 검색필터 목록 화면이 맞는지 확인하세요."
+                " 브라우저 주소창의 목록 화면 URL 을 그대로 붙여넣으면 됩니다.",
+                major=True,
+            )
+
+    options = read_site_options(page)
+    if options:
+        _log(progress, f"  [진단] 상품수집사이트 옵션={options}", major=True)
 
 
 def list_rows(page) -> list[RowInfo]:
