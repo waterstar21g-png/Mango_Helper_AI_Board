@@ -860,28 +860,3 @@ def test_screenshot_row_11_is_ftid_782():
     ] + [mc.RowInfo(index=10, ftid="782", filter_name="아름트리-무신사-여성-신발-샌들/슬리퍼")]
     lines = mc.format_row_list(rows, row_from=11, row_to=11)
     assert "★ 11행: ftid=782" in lines[10]
-
-
-# ── 상품수집사이트 선택 (대소문자·공백 차이 허용) ──────────────────
-
-
-SITE_OPTIONS = ["-- 수집사이트 --", "4910.kr", "ABCmart.a-rt.com", "MUSINSA.com", "Zara.com/de"]
-
-
-def test_match_site_option_is_case_insensitive():
-    """★`MUSINSA.COM` 입력이 `MUSINSA.com` 옵션을 못 찾아 선택 실패하던 문제."""
-    assert mc.match_site_option(SITE_OPTIONS, "MUSINSA.COM") == "MUSINSA.com"
-    assert mc.match_site_option(SITE_OPTIONS, "musinsa.com") == "MUSINSA.com"
-    assert mc.match_site_option(SITE_OPTIONS, "MUSINSA.com") == "MUSINSA.com"
-
-
-def test_match_site_option_ignores_spaces_and_allows_partial():
-    assert mc.match_site_option(SITE_OPTIONS, " MUSINSA . com ") == "MUSINSA.com"
-    assert mc.match_site_option(SITE_OPTIONS, "musinsa") == "MUSINSA.com"
-    assert mc.match_site_option(SITE_OPTIONS, "abcmart.A-RT.com") == "ABCmart.a-rt.com"
-
-
-def test_match_site_option_returns_none_when_absent():
-    assert mc.match_site_option(SITE_OPTIONS, "coupang.com") is None
-    assert mc.match_site_option(SITE_OPTIONS, "") is None
-    assert mc.match_site_option([], "MUSINSA.com") is None

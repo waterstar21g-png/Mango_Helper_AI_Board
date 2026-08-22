@@ -419,49 +419,6 @@ def _first(page, selectors: Iterable[str]):
     return None
 
 
-SITE_OPTIONS_JS = "(el) => Array.from(el.options).map(o => (o.textContent || '').trim())"
-
-
-def _norm_site(text: str) -> str:
-    """사이트명 비교용 — 공백 제거 + 소문자."""
-    return "".join(str(text or "").split()).lower()
-
-
-def match_site_option(options: Sequence[str], wanted: str) -> str | None:
-    """입력한 사이트명을 실제 옵션에 맞춘다.
-
-    정확 일치 → 대소문자·공백 무시 → 부분 포함. `MUSINSA.COM` 처럼 대소문자가
-    다르게 입력돼도 `MUSINSA.com` 옵션을 찾아낸다.
-    """
-    want = str(wanted or "").strip()
-    if not want:
-        return None
-    for opt in options:
-        if opt == want:
-            return opt
-    nw = _norm_site(want)
-    for opt in options:
-        if _norm_site(opt) == nw:
-            return opt
-    for opt in options:
-        no = _norm_site(opt)
-        if nw and no and (nw in no or no in nw):
-            return opt
-    return None
-
-
-def read_site_options(page) -> list[str]:
-    """상품수집사이트 드롭다운의 옵션 텍스트 목록."""
-    loc = _first(page, ('select[name="site_id"]',))
-    if loc is None:
-        return []
-    try:
-        raw = loc.evaluate(SITE_OPTIONS_JS) or []
-    except Exception:
-        return []
-    return [str(t).strip() for t in raw if str(t).strip()]
-
-
 def select_site(page, site_id: str, *, progress: ProgressFn | None = None) -> bool:
     """상품수집사이트 리스트박스 선택 (초기 1회)."""
     if not site_id:
@@ -470,33 +427,17 @@ def select_site(page, site_id: str, *, progress: ProgressFn | None = None) -> bo
     if loc is None:
         _log(progress, "오류: 상품수집사이트 드롭다운 미검출", major=True)
         return False
-
-    options = read_site_options(page)
-    target = match_site_option(options, site_id) if options else site_id
-    if target is None:
-        _log(
-            progress,
-            f"오류: 상품수집사이트 미검출 · 입력={site_id} · 화면목록={options}",
-            major=True,
-        )
-        return False
-
     for how in ("label", "value"):
         try:
             if how == "label":
-                loc.select_option(label=target, timeout=T_CLICK)
+                loc.select_option(label=site_id, timeout=T_CLICK)
             else:
-                loc.select_option(target, timeout=T_CLICK)
-            note = "" if target == site_id else f" (입력 {site_id} → 화면 {target})"
-            _log(progress, f"상품수집사이트: {target}{note}", major=True)
+                loc.select_option(site_id, timeout=T_CLICK)
+            _log(progress, f"상품수집사이트: {site_id}", major=True)
             return True
         except Exception:
             continue
-    _log(
-        progress,
-        f"오류: 상품수집사이트 선택 실패 · {target} · 화면목록={options}",
-        major=True,
-    )
+    _log(progress, f"오류: 상품수집사이트 선택 실패 · {site_id}", major=True)
     return False
 
 
@@ -529,80 +470,34 @@ def click_search_filter(page, *, progress: ProgressFn | None = None) -> bool:
 
 LIST_ROWS_JS = r"""
 () => {
-  // 표 구조에 기대지 않고 행을 찾는다.
-  // 1순위 [설정수정] 링크 → 2순위 ps_ftid 를 품은 요소 → 3순위 attr-uid / id="td_<ftid>"
-  const nameOf = (tr, ftid) => {
+  // 표 구조에 기대지 않고 [설정수정] 링크에서 거꾸로 행을 찾는다
+  const out = [];
+  const anchors = Array.from(document.querySelectorAll('a[onclick*="market_mapping_new"]'));
+  anchors.forEach((a, idx) => {
+    const onclick = a.getAttribute('onclick') || '';
+    const m = onclick.match(/market_mapping_new\(\s*'?(\d+)'?/);
+    const ftid = m ? m[1] : '';
+    if (!ftid) return;
+
+    const tr = a.closest('tr');
     let name = '';
+    let checked = false;
     if (tr) {
+      const cb = tr.querySelector('input[type="checkbox"]');
+      checked = cb ? !!cb.checked : false;
       const vals = Array.from(tr.querySelectorAll('input[type="text"], input:not([type])'))
-        .map(i => (i.value || i.getAttribute('value') || '').trim())
+        .map(i => (i.value || '').trim())
         .filter(v => v && !/^https?:/i.test(v) && !/^\d+$/.test(v));
       if (vals.length) name = vals[0];
+      if (!name) {
+        const byUid = document.querySelector('input[attr-uid="' + ftid + '"]');
+        if (byUid) name = (byUid.value || '').trim();
+      }
+      if (!name) name = ((tr.innerText || '').trim().split('\n')[0] || '').trim();
     }
-    if (!name && ftid) {
-      const byUid = document.querySelector('input[attr-uid="' + ftid + '"]');
-      if (byUid) name = (byUid.value || byUid.getAttribute('value') || '').trim();
-    }
-    if (!name && tr) name = ((tr.innerText || '').trim().split('\n')[0] || '').trim();
-    return name;
-  };
-  const checkedOf = (tr) => {
-    if (!tr) return false;
-    const cb = tr.querySelector('input[type="checkbox"]');
-    return cb ? !!cb.checked : false;
-  };
-
-  const collect = (pairs) => {
-    // pairs: [ftid, 기준 element]
-    const seen = new Set();
-    const out = [];
-    for (const [ftid, el] of pairs) {
-      if (!ftid || seen.has(ftid)) continue;
-      seen.add(ftid);
-      const tr = el && el.closest ? el.closest('tr') : null;
-      out.push({
-        index: out.length,
-        ftid: ftid,
-        filterName: nameOf(tr, ftid),
-        checked: checkedOf(tr),
-      });
-    }
-    return out;
-  };
-
-  // 1) [설정수정] 링크
-  let pairs = [];
-  for (const a of Array.from(document.querySelectorAll('a[onclick*="market_mapping_new"]'))) {
-    const m = (a.getAttribute('onclick') || '').match(/market_mapping_new\(\s*'?(\d+)'?/);
-    if (m) pairs.push([m[1], a]);
-  }
-  let rows = collect(pairs);
-  if (rows.length) return rows;
-
-  // 2) onclick·href 에 ps_ftid 또는 market_mapping 계열이 있는 요소
-  pairs = [];
-  for (const el of Array.from(document.querySelectorAll('a, button, input, td'))) {
-    const src = (el.getAttribute('onclick') || '') + ' '
-      + (el.getAttribute('href') || '') + ' ' + (el.href || '');
-    if (!src.trim()) continue;
-    const m = src.match(/ps_ftid=(\d+)/)
-      || src.match(/market_mapping[a-z_]*\(\s*'?(\d+)'?/i);
-    if (m) pairs.push([m[1], el]);
-  }
-  rows = collect(pairs);
-  if (rows.length) return rows;
-
-  // 3) 필터명 input 의 attr-uid · td 의 id="td_<ftid>"
-  pairs = [];
-  for (const inp of Array.from(document.querySelectorAll('input[attr-uid]'))) {
-    const uid = (inp.getAttribute('attr-uid') || '').trim();
-    if (/^\d+$/.test(uid)) pairs.push([uid, inp]);
-  }
-  for (const td of Array.from(document.querySelectorAll('td[id^="td_"]'))) {
-    const m = (td.getAttribute('id') || '').match(/^td_(\d+)$/);
-    if (m) pairs.push([m[1], td]);
-  }
-  return collect(pairs);
+    out.push({index: idx, ftid: ftid, filterName: name, checked: checked});
+  });
+  return out;
 }
 """
 
@@ -611,14 +506,6 @@ LIST_DIAG_JS = r"""
 () => {
   const anchors = Array.from(document.querySelectorAll('a[onclick]'));
   const mapping = anchors.filter(a => (a.getAttribute('onclick') || '').includes('market_mapping_new'));
-  // 화면이 실제로 쓰는 함수명·행 식별자를 그대로 뽑아낸다 (추측 없이 고치기 위해)
-  const fns = new Set();
-  for (const el of Array.from(document.querySelectorAll('[onclick]'))) {
-    const m = (el.getAttribute('onclick') || '').match(/([A-Za-z_][A-Za-z0-9_]*)\s*\(/g);
-    if (m) m.forEach(x => fns.add(x.replace(/\s*\($/, '')));
-  }
-  const tables = Array.from(document.querySelectorAll('table'))
-    .map(t => t.id || '').filter(Boolean);
   return {
     url: location.href,
     table: !!document.querySelector('table#search_category'),
@@ -626,13 +513,6 @@ LIST_DIAG_JS = r"""
     checkboxes: document.querySelectorAll('input[type="checkbox"]').length,
     mappingLinks: mapping.length,
     sample: mapping.slice(0, 3).map(a => (a.getAttribute('onclick') || '').slice(0, 60)),
-    attrUid: document.querySelectorAll('input[attr-uid]').length,
-    tdIds: document.querySelectorAll('td[id^="td_"]').length,
-    ftidLinks: Array.from(document.querySelectorAll('a,button,input,td'))
-      .filter(el => /ps_ftid=\d+/.test((el.getAttribute('onclick') || '')
-        + (el.getAttribute('href') || ''))).length,
-    tableIds: tables.slice(0, 8),
-    onclickFns: Array.from(fns).slice(0, 24),
   };
 }
 """
@@ -660,37 +540,13 @@ def diagnose_list(page, *, progress: ProgressFn | None = None) -> None:
             continue
         _log(
             progress,
-            f"  [진단] 프레임{i} tr={info.get('rows')}"
-            f" · 체크박스={info.get('checkboxes')}"
+            f"  [진단] 프레임{i} url={str(info.get('url'))[:80]}"
+            f" · tr={info.get('rows')} · 체크박스={info.get('checkboxes')}"
             f" · 설정수정링크={info.get('mappingLinks')}"
             f" · search_category={info.get('table')}"
             f" · 예시={info.get('sample')}",
             major=True,
         )
-        # URL 은 잘리면 원인 파악이 안 되므로 통째로 남긴다
-        _log(progress, f"  [진단] 프레임{i} url={info.get('url')}", major=True)
-        # 행 식별자 후보 — 어느 폴백으로 잡아야 하는지 바로 보이게
-        _log(
-            progress,
-            f"  [진단] 프레임{i} attr-uid={info.get('attrUid')}"
-            f" · td_id={info.get('tdIds')}"
-            f" · ps_ftid={info.get('ftidLinks')}"
-            f" · table id={info.get('tableIds')}",
-            major=True,
-        )
-        _log(progress, f"  [진단] 프레임{i} onclick 함수={info.get('onclickFns')}", major=True)
-        if int(info.get("rows") or 0) == 0 and not info.get("table"):
-            _log(
-                progress,
-                "  [진단] 이 화면에는 목록 표가 아예 없습니다 — 「작업 URL」 이"
-                " 검색필터 목록 화면이 맞는지 확인하세요."
-                " 브라우저 주소창의 목록 화면 URL 을 그대로 붙여넣으면 됩니다.",
-                major=True,
-            )
-
-    options = read_site_options(page)
-    if options:
-        _log(progress, f"  [진단] 상품수집사이트 옵션={options}", major=True)
 
 
 def list_rows(page) -> list[RowInfo]:
