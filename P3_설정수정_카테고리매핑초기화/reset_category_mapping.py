@@ -159,6 +159,16 @@ def run_reset(
     result = RunResult(ok=False)
     clear_stop_flag()
 
+    # 작업 URL 은 필수 — 기본값으로 엉뚱한 화면에서 초기화하면 되돌릴 수 없다
+    url = (list_url or "").strip()
+    if not url:
+        result.errors.append(
+            "작업 URL 을 입력하세요 — 브라우저에서 검색필터 목록 화면을 띄운 뒤"
+            " 주소창 URL 을 그대로 붙여넣으면 됩니다."
+        )
+        _log(progress, result.errors[0], major=True)
+        return result
+
     try:
         import collect as p2  # noqa: WPS433
         from playwright.sync_api import sync_playwright
@@ -167,7 +177,6 @@ def run_reset(
         _log(progress, result.errors[0], major=True)
         return result
 
-    url = (list_url or "").strip() or DEFAULT_LIST_URL
     start, end = mc.row_range(row_from, row_to)
 
     try:
@@ -232,7 +241,7 @@ def run_reset(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="P3_설정수정_카테고리매핑초기화")
     parser.add_argument("--site-id", default=DEFAULT_SITE, help="상품수집사이트 (비우면 유지)")
-    parser.add_argument("--list-url", default="", help=f"목록 URL (기본={DEFAULT_LIST_URL[:60]}…)")
+    parser.add_argument("--list-url", default="", help="목록 URL (필수 — 검색필터 목록 화면 주소)")
     parser.add_argument(
         "--row-from", type=int, default=DEFAULT_ROW_FROM, help=f"작업 시작 행 (기본 {DEFAULT_ROW_FROM})"
     )
