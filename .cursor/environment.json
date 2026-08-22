@@ -1,0 +1,4 @@
+{
+  "name": "망고보드 (Mango Helper AI Board)",
+  "install": "bash scripts/cloud-agent-install.sh"
+}
