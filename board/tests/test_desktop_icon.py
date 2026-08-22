@@ -205,3 +205,69 @@ def test_registry_has_desktop_icon_entry():
     entry = next(p for p in data["programs"] if p["id"] == "desktop_icon")
     assert (ROOT / entry["script"]).is_file()
     assert (ROOT / entry["launcher"]).is_file()
+
+
+# ── 작업표시줄 고정 (Win10 1903+ · Win11 대응) ────────────────────
+
+
+def test_shortcut_targets_cmd_so_it_can_be_pinned(tmp_path):
+    """★.bat 을 직접 가리키는 바로가기는 Windows 가 작업표시줄 고정을 막는다.
+
+    cmd.exe 를 타깃으로 두고 run.bat 을 인자로 넘겨야 고정이 가능하다.
+    """
+    script = desktop_icon.build_powershell(ROOT, [tmp_path / "망고보드.lnk"])
+    assert "System32\\cmd.exe" in script
+    assert "$sc.TargetPath = $target" in script
+    assert "$sc.Arguments = '/c ' + [char]34 + $bat + [char]34" in script
+    assert str(ROOT / "run.bat") in script       # run.bat 은 인자로 유지
+
+
+def test_pin_verb_name_comes_from_shell32_resource(tmp_path):
+    """현지화 문자열 하드코딩 대신 shell32.dll 리소스에서 verb 이름을 읽는다."""
+    script = desktop_icon.build_powershell(ROOT, [tmp_path / "망고보드.lnk"])
+    assert desktop_icon.PIN_VERB_RESOURCE_ID == 5386
+    assert "LoadString" in script
+    assert "shell32.dll" in script
+    assert str(desktop_icon.PIN_VERB_RESOURCE_ID) in script
+    assert desktop_icon.PIN_VERB_PATTERN in script   # 폴백은 유지
+
+
+def test_pin_failure_opens_explorer_with_icon_selected(tmp_path):
+    """자동 고정이 막히면 우클릭 고정을 바로 할 수 있게 탐색기를 띄운다."""
+    script = desktop_icon.build_powershell(ROOT, [tmp_path / "망고보드.lnk"])
+    assert "/select," in script
+    assert "explorer.exe" in script
+
+
+def test_pin_only_script_requires_existing_icon(tmp_path):
+    lnk = tmp_path / "망고보드.lnk"
+    script = desktop_icon.build_pin_only_powershell(lnk)
+    assert "NOLNK" in script
+    assert "CreateShortcut" not in script      # 아이콘을 다시 만들지 않는다
+    assert "User Pinned\\TaskBar" in script    # 고정은 시도한다
+
+
+def test_create_pin_only_reports_missing_icon(monkeypatch, tmp_path):
+    (tmp_path / "run.bat").write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(desktop_icon, "is_windows", lambda: True)
+    monkeypatch.setattr(
+        desktop_icon, "shortcut_paths", lambda *a, **k: [tmp_path / "망고보드.lnk"]
+    )
+
+    class Proc:
+        stdout = "NOLNK C:\\x\\망고보드.lnk\n".encode("utf-8")
+        stderr = b""
+
+    monkeypatch.setattr(desktop_icon.subprocess, "run", lambda *a, **k: Proc())
+    result = desktop_icon.create(tmp_path, pin_only=True)
+    assert result["ok"] is False
+    assert "먼저 아이콘을 만드세요" in result["message"]
+
+
+def test_pin_only_launcher_bat_exists():
+    bat = ROOT / "망고보드_작업표시줄고정.bat"
+    assert bat.is_file()
+    text = bat.read_text(encoding="utf-8")
+    assert "--pin-only" in text
+    assert "desktop_icon.py" in text
+    assert not text.startswith("\ufeff")   # .bat 에 BOM 이 붙으면 첫 줄이 깨진다
