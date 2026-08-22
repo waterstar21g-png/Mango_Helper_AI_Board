@@ -650,3 +650,18 @@ def test_underwear_filter_excludes_outer_and_shoes():
     cats = ["속옷 > 여성속옷상의", "아우터 > 패딩", "신발 > 운동화"]
     cat, step = mt.find_category("여성-속옷-상의", cats)
     assert cat == "속옷 > 여성속옷상의"
+
+
+def test_class_of_recognizes_hat_subcategories():
+    """★모자 화면 하위 카테고리명을 '모자' 계열로 인식한다."""
+    for word in (
+        "캡/야구모자", "헌팅캡/베레모", "페도라", "버킷/사파리햇",
+        "비니", "트루퍼", "바라클라바", "기타 모자",
+    ):
+        assert mt.class_of(word) == "모자", f"{word} 가 모자 계열로 인식되지 않음"
+
+
+def test_hat_filter_excludes_other_classes():
+    cats = ["모자 > 페도라", "의류 > 니트", "신발 > 운동화"]
+    cat, step = mt.find_category("남성-모자-페도라", cats)
+    assert cat == "모자 > 페도라"
