@@ -540,3 +540,30 @@ def test_shoe_synonyms_include_active_and_sports_shoes():
         "남성-잡화-신발", ["잡화 > 남성 > 활동화", "여성패션 > 상의"]
     )
     assert cat == "잡화 > 남성 > 활동화"
+
+
+# ── 뷰티 계열 (스크린샷 하위 카테고리 = 뷰티의 다른 이름) ──────────
+
+
+def test_class_of_recognizes_beauty_subcategories():
+    """★뷰티 화면 하위 카테고리명 자체를 '뷰티' 계열로 인식한다."""
+    for word in (
+        "스킨케어", "마스크팩", "베이스메이크업", "립메이크업", "아이메이크업",
+        "네일", "프레그런스", "선케어", "클렌징", "필링", "헤어케어", "바디케어",
+        "쉐이빙", "제모", "뷰티디바이스", "미용소품", "헬스", "푸드",
+    ):
+        assert mt.class_of(word) == "뷰티", f"{word} 가 뷰티 계열로 인식되지 않음"
+
+
+def test_beauty_filter_excludes_clothing_and_shoes():
+    """뷰티 필터는 의류·신발 카테고리와 섞이지 않는다."""
+    cats = ["뷰티 > 스킨케어 > 토너", "남성패션 > 상의 > 니트", "신발 > 운동화"]
+    cat, step = mt.find_category("여성-뷰티-스킨케어", cats)
+    assert cat == "뷰티 > 스킨케어 > 토너"
+
+
+def test_beauty_class_isolated_from_other_classes():
+    """의류·신발 필터도 뷰티 카테고리를 잘못 고르지 않는다."""
+    cats = ["뷰티 > 헤어케어 > 샴푸", "남성패션 > 상의 > 니트"]
+    cat, step = mt.find_category("남성-상의-니트", cats)
+    assert cat == "남성패션 > 상의 > 니트"
