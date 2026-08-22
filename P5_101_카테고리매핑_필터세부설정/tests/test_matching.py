@@ -740,3 +740,33 @@ def test_underwear_related_compound_word_not_treated_as_sibling_conflict():
     cats = ["속옷/홈웨어 > 여성 속옷 상의", "아우터 > 패딩", "신발 > 운동화"]
     cat, step = mt.find_category("여성-속옷-상의", cats)
     assert cat == "속옷/홈웨어 > 여성 속옷 상의"
+
+
+# ── "브랜드" 카테고리는 엑셀에 있어도 절대 확정하지 않는다 ─────────
+
+
+def test_find_category_never_confirms_brand_only_category():
+    """★실사례: 옥션2.0/11번가/G마켓2.0 엑셀에 정식 카테고리 없이 '브랜드 …'
+    카테고리만 있는 경우 — 매핑하지 않는다(엑셀에 있어도 확정하지 않음).
+    """
+    cats = ["브랜드 여성의류 > 야상/점퍼/패딩 > 바람막이"]
+    cat, step = mt.find_category("여성-아우터-바람막이", cats)
+    assert cat == ""
+    assert "브랜드" in step
+
+
+def test_find_category_prefers_non_brand_when_both_exist():
+    """정식(비브랜드) 카테고리가 있으면 그것을 쓴다."""
+    cats = [
+        "브랜드 여성의류 > 야상/점퍼/패딩 > 바람막이",
+        "패션의류 > 여성의류 > 아우터 > 바람막이",
+    ]
+    cat, step = mt.find_category("여성-아우터-바람막이", cats)
+    assert cat == "패션의류 > 여성의류 > 아우터 > 바람막이"
+
+
+def test_find_category_brand_exclusion_applies_regardless_of_gender():
+    """성별이 없는 필터에도 브랜드 배제가 동일하게 적용된다."""
+    cats = ["브랜드 캐쥬얼의류 > 티셔츠/셔츠 > 맨투맨/후드"]
+    cat, step = mt.find_category("아우터-맨투맨", cats)
+    assert cat == ""
