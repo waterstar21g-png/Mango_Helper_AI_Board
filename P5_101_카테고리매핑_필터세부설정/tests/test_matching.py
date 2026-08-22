@@ -567,3 +567,26 @@ def test_beauty_class_isolated_from_other_classes():
     cats = ["뷰티 > 헤어케어 > 샴푸", "남성패션 > 상의 > 니트"]
     cat, step = mt.find_category("남성-상의-니트", cats)
     assert cat == "남성패션 > 상의 > 니트"
+
+
+# ── 아우터 하위 카테고리 (다른 이름 -> 의류 계열) ──────────────────
+
+
+def test_class_of_recognizes_outer_subcategories():
+    """★아우터 화면 하위 카테고리명을 '의류' 계열로 인식한다."""
+    for word in (
+        "후드집업", "블루종", "라이더스 재킷", "슈트/블레이저 재킷", "카디건",
+        "경량 패딩", "패딩 베스트", "사파리/헌팅 재킷", "트러커 재킷",
+        "스타디움 재킷", "나일론/코치 재킷", "트레이닝 재킷", "아노락 재킷",
+        "플리스/뽀글이", "환절기 코트", "베스트", "무스탕/퍼",
+        "겨울 싱글 코트", "겨울 더블 코트", "겨울 기타 코트", "숏패딩",
+        "롱패딩/헤비 아우터", "기타 아우터",
+    ):
+        assert mt.class_of(word) == "의류", f"{word} 가 의류 계열로 인식되지 않음"
+
+
+def test_outer_filter_excludes_shoes_and_beauty():
+    """아우터(패딩 등) 필터는 신발·뷰티 카테고리와 섞이지 않는다."""
+    cats = ["아우터 > 패딩 > 롱패딩", "신발 > 운동화", "뷰티 > 스킨케어"]
+    cat, step = mt.find_category("남성-아우터-패딩", cats)
+    assert cat == "아우터 > 패딩 > 롱패딩"
