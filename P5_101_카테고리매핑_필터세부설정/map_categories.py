@@ -529,34 +529,80 @@ def click_search_filter(page, *, progress: ProgressFn | None = None) -> bool:
 
 LIST_ROWS_JS = r"""
 () => {
-  // 표 구조에 기대지 않고 [설정수정] 링크에서 거꾸로 행을 찾는다
-  const out = [];
-  const anchors = Array.from(document.querySelectorAll('a[onclick*="market_mapping_new"]'));
-  anchors.forEach((a, idx) => {
-    const onclick = a.getAttribute('onclick') || '';
-    const m = onclick.match(/market_mapping_new\(\s*'?(\d+)'?/);
-    const ftid = m ? m[1] : '';
-    if (!ftid) return;
-
-    const tr = a.closest('tr');
+  // 표 구조에 기대지 않고 행을 찾는다.
+  // 1순위 [설정수정] 링크 → 2순위 ps_ftid 를 품은 요소 → 3순위 attr-uid / id="td_<ftid>"
+  const nameOf = (tr, ftid) => {
     let name = '';
-    let checked = false;
     if (tr) {
-      const cb = tr.querySelector('input[type="checkbox"]');
-      checked = cb ? !!cb.checked : false;
       const vals = Array.from(tr.querySelectorAll('input[type="text"], input:not([type])'))
-        .map(i => (i.value || '').trim())
+        .map(i => (i.value || i.getAttribute('value') || '').trim())
         .filter(v => v && !/^https?:/i.test(v) && !/^\d+$/.test(v));
       if (vals.length) name = vals[0];
-      if (!name) {
-        const byUid = document.querySelector('input[attr-uid="' + ftid + '"]');
-        if (byUid) name = (byUid.value || '').trim();
-      }
-      if (!name) name = ((tr.innerText || '').trim().split('\n')[0] || '').trim();
     }
-    out.push({index: idx, ftid: ftid, filterName: name, checked: checked});
-  });
-  return out;
+    if (!name && ftid) {
+      const byUid = document.querySelector('input[attr-uid="' + ftid + '"]');
+      if (byUid) name = (byUid.value || byUid.getAttribute('value') || '').trim();
+    }
+    if (!name && tr) name = ((tr.innerText || '').trim().split('\n')[0] || '').trim();
+    return name;
+  };
+  const checkedOf = (tr) => {
+    if (!tr) return false;
+    const cb = tr.querySelector('input[type="checkbox"]');
+    return cb ? !!cb.checked : false;
+  };
+
+  const collect = (pairs) => {
+    // pairs: [ftid, 기준 element]
+    const seen = new Set();
+    const out = [];
+    for (const [ftid, el] of pairs) {
+      if (!ftid || seen.has(ftid)) continue;
+      seen.add(ftid);
+      const tr = el && el.closest ? el.closest('tr') : null;
+      out.push({
+        index: out.length,
+        ftid: ftid,
+        filterName: nameOf(tr, ftid),
+        checked: checkedOf(tr),
+      });
+    }
+    return out;
+  };
+
+  // 1) [설정수정] 링크
+  let pairs = [];
+  for (const a of Array.from(document.querySelectorAll('a[onclick*="market_mapping_new"]'))) {
+    const m = (a.getAttribute('onclick') || '').match(/market_mapping_new\(\s*'?(\d+)'?/);
+    if (m) pairs.push([m[1], a]);
+  }
+  let rows = collect(pairs);
+  if (rows.length) return rows;
+
+  // 2) onclick·href 에 ps_ftid 또는 market_mapping 계열이 있는 요소
+  pairs = [];
+  for (const el of Array.from(document.querySelectorAll('a, button, input, td'))) {
+    const src = (el.getAttribute('onclick') || '') + ' '
+      + (el.getAttribute('href') || '') + ' ' + (el.href || '');
+    if (!src.trim()) continue;
+    const m = src.match(/ps_ftid=(\d+)/)
+      || src.match(/market_mapping[a-z_]*\(\s*'?(\d+)'?/i);
+    if (m) pairs.push([m[1], el]);
+  }
+  rows = collect(pairs);
+  if (rows.length) return rows;
+
+  // 3) 필터명 input 의 attr-uid · td 의 id="td_<ftid>"
+  pairs = [];
+  for (const inp of Array.from(document.querySelectorAll('input[attr-uid]'))) {
+    const uid = (inp.getAttribute('attr-uid') || '').trim();
+    if (/^\d+$/.test(uid)) pairs.push([uid, inp]);
+  }
+  for (const td of Array.from(document.querySelectorAll('td[id^="td_"]'))) {
+    const m = (td.getAttribute('id') || '').match(/^td_(\d+)$/);
+    if (m) pairs.push([m[1], td]);
+  }
+  return collect(pairs);
 }
 """
 
