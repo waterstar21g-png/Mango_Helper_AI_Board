@@ -590,3 +590,63 @@ def test_outer_filter_excludes_shoes_and_beauty():
     cats = ["아우터 > 패딩 > 롱패딩", "신발 > 운동화", "뷰티 > 스킨케어"]
     cat, step = mt.find_category("남성-아우터-패딩", cats)
     assert cat == "아우터 > 패딩 > 롱패딩"
+
+
+# ── 바지 하위 카테고리 · 속옷/홈웨어 계열 ───────────────────────────
+
+
+def test_class_of_recognizes_pants_subcategories():
+    for word in (
+        "데님 팬츠", "트레이닝/조거 팬츠", "코튼 팬츠", "슈트 팬츠/슬랙스",
+        "숏 팬츠", "레깅스", "점프 슈트/오버올", "기타 하의",
+    ):
+        assert mt.class_of(word) == "의류", f"{word} 가 의류 계열로 인식되지 않음"
+
+
+def test_class_of_recognizes_underwear_subcategories():
+    for word in ("홈웨어", "여성 속옷 상의", "여성 속옷 하의", "여성 속옷 세트"):
+        assert mt.class_of(word) == "속옷", f"{word} 가 속옷 계열로 인식되지 않음"
+
+
+def test_underwear_filter_excludes_other_classes():
+    cats = ["속옷/홈웨어 > 여성 속옷 상의", "아우터 > 패딩", "신발 > 운동화"]
+    cat, step = mt.find_category("여성-속옷-상의", cats)
+    assert cat == "속옷/홈웨어 > 여성 속옷 상의"
+
+
+# ── 바지 하위 카테고리 · 속옷/홈웨어 · 신발 품목별 (다른 이름) ─────
+
+
+def test_class_of_recognizes_pants_subcategories():
+    for word in (
+        "데님 팬츠", "트레이닝/조거 팬츠", "코튼 팬츠", "슈트 팬츠/슬랙스",
+        "숏 팬츠", "레깅스", "점프 슈트/오버올", "기타 하의",
+    ):
+        assert mt.class_of(word) == "의류", f"{word} 가 의류 계열로 인식되지 않음"
+
+
+def test_class_of_recognizes_underwear_subcategories():
+    for word in ("홈웨어", "여성 속옷 상의", "여성 속옷 하의", "여성 속옷 세트"):
+        assert mt.class_of(word) == "속옷", f"{word} 가 속옷 계열로 인식되지 않음"
+
+
+def test_class_of_recognizes_shoe_item_subcategories():
+    for word in (
+        "스니커즈", "스포츠화", "구두", "부츠/워커", "샌들/슬리퍼",
+        "패딩/퍼 신발", "신발용품",
+    ):
+        assert mt.class_of(word) == "신발", f"{word} 가 신발 계열로 인식되지 않음"
+
+
+def test_class_of_prefers_longer_match_at_same_position():
+    """★'패딩/퍼 신발' 처럼 앞머리가 다른 계열 단어(패딩)와 겹치면,
+    더 길게(구체적으로) 일치하는 쪽(신발 전체 문구)을 우선한다.
+    """
+    assert mt.class_of("패딩/퍼 신발") == "신발"     # "패딩"(의류) 보다 길게 일치
+    assert mt.class_of("패딩 베스트") == "의류"       # 신발 관련 없음 — 그대로 의류
+
+
+def test_underwear_filter_excludes_outer_and_shoes():
+    cats = ["속옷 > 여성속옷상의", "아우터 > 패딩", "신발 > 운동화"]
+    cat, step = mt.find_category("여성-속옷-상의", cats)
+    assert cat == "속옷 > 여성속옷상의"
