@@ -361,6 +361,24 @@ def search_keyword_for(category_path: str) -> str:
     return leaf_of(category_path)
 
 
+def search_terms_for(category_path: str) -> list[str]:
+    """★요건: 확정된 카테고리명으로 망고를 검색하는 순서 — 하위(리프) 먼저,
+    안 되면 중위(하나 위 단계) 로 재시도.
+
+    엑셀 검색(matching.find_category)에서 이미 최종 카테고리명이 확정된
+    뒤의 단계다. 여기서는 그 확정값을 바꾸지 않고, **어떤 검색어로 망고를
+    검색할지**만 순서대로 정한다 — 검색 결과 목록에서 고르는 기준(리프
+    일치)은 그대로다(pick_option, 다른 로직 추가 없음).
+    """
+    levels = [p.strip() for p in str(category_path or "").split(">") if p.strip()]
+    if not levels:
+        return []
+    terms = [levels[-1]]  # 1) 하위(리프)
+    if len(levels) >= 2 and levels[-2] not in terms:
+        terms.append(levels[-2])  # 2) 하위로 안 되면 중위
+    return terms
+
+
 def gender_safe_options(options: Sequence[str], filter_name: str) -> list[str]:
     """★검색 결과에도 성별 규칙을 적용한다.
 
@@ -955,9 +973,16 @@ def result_select_ids(market: str) -> list[str]:
 
 
 def read_result_options(
-    popup, market: str, *, timeout_ms: int = T_LIST
+    popup, market: str, *, timeout_ms: int | None = None
 ) -> tuple[list[str], str]:
-    """(옵션 목록, 사용한 select id) — 보이는 리스트박스 기준."""
+    """(옵션 목록, 사용한 select id) — 보이는 리스트박스 기준.
+
+    `timeout_ms` 기본값은 호출 시점의 `T_LIST` 를 그대로 읽는다 — 함수 정의
+    시점 값으로 고정하면(`= T_LIST`) 테스트에서 `monkeypatch.setattr(mc,
+    "T_LIST", ...)` 로 줄여도 반영되지 않아 매번 진짜 5초를 기다리게 된다.
+    """
+    if timeout_ms is None:
+        timeout_ms = T_LIST
     deadline = time.monotonic() + timeout_ms / 1000
     while True:
         try:
@@ -1096,36 +1121,52 @@ def _map_once(
         return MappedItem(market, "", 0.0, False, "유사 카테고리 없음")
     _log(progress, f"  {label}: 최적 카테고리(엑셀) = {category}  [{step}]")
 
-    keyword = search_keyword_for(category)
     box = market_search_input(popup, market)
     if box is None:
         return MappedItem(market, category, score, False, "검색필드 미검출")
-    try:
-        box.fill(keyword, timeout=T_CLICK)
-    except Exception as e:  # noqa: BLE001
-        return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
 
-    if not click_market_search(popup, market):
-        return MappedItem(market, category, score, False, "검색 버튼 미검출")
+    # ★요건: 확정된 카테고리명(category, 변경 없음)으로 하위→중위 순서로
+    #   재시도해 검색한다. 결과에서 고르는 기준(pick_option — 완전일치·
+    #   리프일치)은 검색어가 바뀌어도 그대로다. 다른 판단 로직을 추가하지 않음.
+    terms = search_terms_for(category)
+    last_reason = "검색 결과 없음"
+    for i, keyword in enumerate(terms, start=1):
+        try:
+            box.fill(keyword, timeout=T_CLICK)
+        except Exception as e:  # noqa: BLE001
+            return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
 
-    options, select_id = read_result_options(popup, market)
-    if not options:
-        return MappedItem(market, category, score, False, "검색 결과 없음")
+        if not click_market_search(popup, market):
+            return MappedItem(market, category, score, False, "검색 버튼 미검출")
 
-    # 결과 목록에서는 **엑셀 카테고리** 를 기준으로 고른다 (필터명은 성별 판정용)
-    picked = pick_option(options, category, filter_name)
-    if not picked and matching.gender_of(filter_name):
-        gender = matching.gender_of(filter_name)
-        _log(progress, f"  {label}: 성별({gender}) 조건에 맞는 검색결과 없음", major=True)
-        return MappedItem(market, category, score, False, f"성별({gender}) 검색결과 없음")
-    if picked and matching.violates_gender(picked, filter_name):
-        _log(progress, f"  {label}: 반대 성별 결과 배제 → {picked}", major=True)
-        return MappedItem(market, category, score, False, "반대 성별 검색결과만 있음")
-    if not picked or not choose_option(popup, market, picked, select_id=select_id):
-        return MappedItem(market, category, score, False, "목록 선택 실패")
+        options, select_id = read_result_options(popup, market)
+        if not options:
+            last_reason = f"검색 결과 없음 (검색어={keyword!r})"
+            continue
 
-    _log(progress, f"  {label}: 선택 완료 → {picked}")
-    return MappedItem(market, picked, score, True, step)
+        # 결과 목록에서는 **엑셀에서 확정한 카테고리** 를 기준으로만 고른다
+        # (필터명은 성별 판정용) — 검색어가 하위/중위로 바뀌어도 이 기준은 그대로.
+        picked = pick_option(options, category, filter_name)
+        if not picked and matching.gender_of(filter_name):
+            gender = matching.gender_of(filter_name)
+            last_reason = f"성별({gender}) 검색결과 없음 (검색어={keyword!r})"
+            continue
+        if picked and matching.violates_gender(picked, filter_name):
+            _log(progress, f"  {label}: 반대 성별 결과 배제 → {picked}", major=True)
+            last_reason = "반대 성별 검색결과만 있음"
+            continue
+        if not picked:
+            last_reason = f"확정 카테고리와 일치하는 결과 없음 (검색어={keyword!r})"
+            continue
+        if not choose_option(popup, market, picked, select_id=select_id):
+            last_reason = "목록 선택 실패"
+            continue
+
+        note = f" (검색어={keyword!r})" if i > 1 else ""
+        _log(progress, f"  {label}: 선택 완료 → {picked}{note}")
+        return MappedItem(market, picked, score, True, step)
+
+    return MappedItem(market, category, score, False, last_reason)
 
 
 MAPPED_STATE_JS = """

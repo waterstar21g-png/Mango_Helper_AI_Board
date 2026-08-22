@@ -278,6 +278,74 @@ class FakePopup:
         return None
 
 
+class KeywordAwarePopup(FakePopup):
+    """검색어(fill 값)에 따라 다른 검색 결과를 돌려주는 가짜 팝업.
+
+    요건: 하위(리프)로 검색해서 안 되면 중위로 재검색 — 이걸 검증하려면
+    검색어별로 다른 결과가 필요하다.
+    """
+
+    def __init__(self, results_by_term: dict[str, list[str]]):
+        super().__init__([])
+        self.results_by_term = dict(results_by_term)
+        self.last_term = ""
+
+    def locator(self, selector):
+        loc = super().locator(selector)
+        if loc.name.startswith("input_"):
+            orig_fill = loc.fill
+
+            def fill(value, timeout=None, _orig=orig_fill):
+                self.last_term = value
+                _orig(value, timeout=timeout)
+
+            loc.fill = fill
+        return loc
+
+    def evaluate(self, script, *args):
+        self.options = self.results_by_term.get(self.last_term, [])
+        return super().evaluate(script, *args)
+
+
+def test_search_terms_for_leaf_then_mid():
+    assert mc.search_terms_for("패션 > 남성신발 > 로퍼") == ["로퍼", "남성신발"]
+    assert mc.search_terms_for("로퍼") == ["로퍼"]      # 단일 단계 — 중위 없음
+    assert mc.search_terms_for("") == []
+
+
+def test_map_one_market_retries_with_mid_term_when_leaf_search_fails(monkeypatch):
+    """★요건: 하위(리프) 검색이 안 되면 중위로 재검색한다.
+
+    확정된 카테고리(엑셀에서 이미 정해진 값)는 바뀌지 않고, 검색어만
+    하위→중위 순서로 바뀐다. 최종 선택 기준(완전일치·리프일치)도 그대로다.
+    """
+    monkeypatch.setattr(mc, "T_LIST", 200)
+    target = "패션의류잡화 > 남성신발 > 로퍼"
+    popup = KeywordAwarePopup(
+        {
+            "로퍼": [],                                    # 1) 하위 검색 — 결과 없음
+            "남성신발": ["패션 > 남성신발 > 로퍼"],          # 2) 중위 검색 — 성공
+        }
+    )
+    logs: list[str] = []
+    item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발-로퍼", [target], progress=logs.append)
+
+    assert item.ok is True
+    assert item.category == "패션 > 남성신발 > 로퍼"
+    fills = [a[2] for a in popup.actions if a[0] == "fill"]
+    assert fills == ["로퍼", "남성신발"]           # 순서: 하위 먼저, 그 다음 중위
+
+
+def test_map_one_market_never_relaxes_final_pick_criteria(monkeypatch):
+    """중위로 재검색해도 결과에서 고르는 기준(엑셀범위 밖 거부)은 그대로다."""
+    monkeypatch.setattr(mc, "T_LIST", 200)
+    target = "남성 신발"
+    # target 에 ">" 가 없어 search_terms_for 는 리프=전체("남성 신발")만 준다.
+    popup = KeywordAwarePopup({"남성 신발": ["브랜드 남성 신발"]})  # 엑셀 밖 — 거부돼야 함
+    item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발", [target])
+    assert item.ok is False
+
+
 def test_map_one_market_full_sequence():
     target = "패션의류/잡화 > 남성패션 > 남성잡화 > 모자 > 비니"
     popup = FakePopup([target, "패션 > 모자 > 캡모자"])
@@ -305,7 +373,7 @@ def test_map_one_market_no_search_result(monkeypatch):
     popup = FakePopup([])
     item = mc.map_one_market(popup, "AUC20", "남성 비니", AUCTION, retries=1)
     assert item.ok is False
-    assert item.reason == "검색 결과 없음"
+    assert item.reason.startswith("검색 결과 없음")
 
 
 def test_map_retries_three_times_with_other_categories(monkeypatch):
