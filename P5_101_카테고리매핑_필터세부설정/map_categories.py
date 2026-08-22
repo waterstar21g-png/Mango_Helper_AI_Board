@@ -646,15 +646,30 @@ def build_mapping_url(ftid: str, *, list_url: str = DEFAULT_LIST_URL) -> str:
     return urlunsplit((parts.scheme, parts.netloc, f"{base_dir}/{CATEGORY_PAGE}", query, ""))
 
 
+def reveal(page, *, progress: ProgressFn | None = None) -> None:
+    """★크롬 창을 화면 맨 앞으로 — 작업 과정(팝업·입력·닫기)이 눈에 보이게 한다.
+
+    `P3_필터_갱신` 과 같은 방식. 안 해주면 실제로는 잘 돌고 있어도 보드 창
+    뒤에 숨어서 사용자에게 안 보인다.
+    """
+    try:
+        page.bring_to_front()
+    except Exception as e:  # noqa: BLE001
+        _log(progress, f"  (화면 앞으로 가져오기 실패: {e})")
+
+
 def open_setting_popup(page, row: RowInfo, *, list_url: str, progress: ProgressFn | None = None):
     """행의 [설정수정] → 팝업. 실패 시 팝업 URL 직접 오픈."""
     sel = f"a[onclick*=\"{SETTING_EDIT_JS}('{row.ftid}')\"]"
     try:
-        with page.expect_popup(timeout=T_FIELD) as info:
-            page.locator(sel).first.click(timeout=T_CLICK)
-        popup = info.value
-        _log(progress, f"  설정수정 팝업 (ftid={row.ftid})")
-        return popup
+        loc = page.locator(sel).first
+        if loc.count() > 0:
+            with page.expect_popup(timeout=T_FIELD) as info:
+                loc.click(timeout=T_CLICK)
+            popup = info.value
+            reveal(popup, progress=progress)
+            _log(progress, f"  설정수정 팝업 (ftid={row.ftid})")
+            return popup
     except Exception:
         pass
 
@@ -662,6 +677,7 @@ def open_setting_popup(page, row: RowInfo, *, list_url: str, progress: ProgressF
     try:
         popup = page.context.new_page()
         popup.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        reveal(popup, progress=progress)
         _log(progress, f"  설정수정 직접 열기 (ftid={row.ftid})")
         return popup
     except Exception as e:  # noqa: BLE001
@@ -1227,6 +1243,7 @@ def list_rows_only(
         with sync_playwright() as pw:
             _browser, page = p2.connect_browser(pw)
             page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            reveal(page, progress=progress)
             _log(progress, f"목록 URL 로 화면 표시: {url}", major=True)
             if not select_site(page, site_id, progress=progress):
                 _log(progress, "  사이트 선택을 건너뜁니다 — URL 화면 결과로 계속합니다", major=True)
@@ -1289,6 +1306,7 @@ def run_mapping(
         with sync_playwright() as pw:
             _browser, page = p2.connect_browser(pw)
             page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            reveal(page, progress=progress)
             _log(progress, "검색필터 목록 화면", major=True)
 
             if not select_site(page, site_id, progress=progress):

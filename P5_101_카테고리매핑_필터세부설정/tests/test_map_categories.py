@@ -894,3 +894,22 @@ def test_list_rows_only_requires_url():
     """빈 URL 로 DEFAULT_LIST_URL 에 몰래 떨어지지 않는다 — 명시 실패로 안내."""
     rows = mc.list_rows_only(list_url="")
     assert rows == []
+
+
+def test_reveal_brings_page_to_front():
+    calls = []
+
+    class FakePage:
+        def bring_to_front(self):
+            calls.append(True)
+
+    mc.reveal(FakePage())
+    assert calls == [True]
+
+
+def test_reveal_does_not_raise_on_failure():
+    class FailingPage:
+        def bring_to_front(self):
+            raise RuntimeError("창 없음")
+
+    mc.reveal(FailingPage())  # 예외 없이 넘어가야 한다

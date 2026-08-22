@@ -201,6 +201,18 @@ def wait_for_rows(
         time.sleep(ROWS_POLL_S)
 
 
+def reveal(page, *, progress: ProgressFn | None = None) -> None:
+    """★크롬 창을 화면 맨 앞으로 — 작업 과정(팝업·입력·닫기)이 눈에 보이게 한다.
+
+    `P3_필터_갱신` 과 같은 방식. 안 해주면 실제로는 잘 돌고 있어도 보드 창
+    뒤에 숨어서 사용자에게 안 보인다.
+    """
+    try:
+        page.bring_to_front()
+    except Exception as e:  # noqa: BLE001
+        _log(progress, f"  (화면 앞으로 가져오기 실패: {e})")
+
+
 def search_and_collect(
     pw,
     url: str,
@@ -216,6 +228,7 @@ def search_and_collect(
     반환: (page, rows, 사용한 url)
     """
     page, used = p3opt._open_mango(pw, url, progress)
+    reveal(page, progress=progress)
     if not p3opt.apply_site_filter(page, site_id, progress=progress):
         _log(
             progress,
@@ -308,6 +321,7 @@ def open_setting_popup(page, ftid: str, *, list_url: str = "", progress: Progres
                 with page.expect_popup(timeout=T_NAV) as info:
                     loc.click(timeout=T_CLICK)
                 popup = info.value
+                reveal(popup, progress=progress)
                 _log(progress, f"  [{SETTING_EDIT_LABEL}] 팝업 열림 (ftid={ftid})")
                 return popup
             except Exception:
@@ -320,6 +334,7 @@ def open_setting_popup(page, ftid: str, *, list_url: str = "", progress: Progres
     try:
         popup = page.context.new_page()
         popup.goto(url, wait_until="domcontentloaded", timeout=T_NAV)
+        reveal(popup, progress=progress)
         _log(progress, f"  [{SETTING_EDIT_LABEL}] 직접 열기 (ftid={ftid})")
         return popup
     except Exception as e:  # noqa: BLE001

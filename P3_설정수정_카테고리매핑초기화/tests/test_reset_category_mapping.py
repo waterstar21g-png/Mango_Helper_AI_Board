@@ -252,3 +252,22 @@ def test_stop_flag_roundtrip():
     assert rcm.stop_requested() is True
     rcm.clear_stop_flag()
     assert rcm.stop_requested() is False
+
+
+def test_reveal_brings_page_to_front():
+    calls = []
+
+    class FakePage:
+        def bring_to_front(self):
+            calls.append(True)
+
+    rcm.reveal(FakePage())
+    assert calls == [True]
+
+
+def test_reveal_does_not_raise_on_failure():
+    class FailingPage:
+        def bring_to_front(self):
+            raise RuntimeError("창 없음")
+
+    rcm.reveal(FailingPage())  # 예외 없이 넘어가야 한다
