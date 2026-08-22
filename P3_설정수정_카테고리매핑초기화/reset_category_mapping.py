@@ -291,14 +291,22 @@ def build_popup_url(list_url: str, ftid: str) -> str:
 
 
 def open_setting_popup(page, ftid: str, *, list_url: str = "", progress: ProgressFn | None = None):
-    """행의 [설정수정] 클릭 → 팝업. 실패 시 팝업 URL 직접 오픈."""
+    """행의 [설정수정] 클릭 → 팝업. 실패 시 팝업 URL 직접 오픈.
+
+    ★프레임을 돌 때 버튼이 **있는지 먼저 즉시 확인**(count, 대기 없음)하고,
+    있는 프레임에서만 클릭+팝업대기 를 시도한다. 관계없는 프레임(광고 iframe 등)
+    까지 매번 클릭을 시도하면 없는 요소를 T_CLICK·T_NAV 만큼씩 헛기다리게 된다.
+    """
     ftid = str(ftid or "").strip()
     if ftid:
         sel = f"a[onclick*=\"{SETTING_EDIT_JS}('{ftid}')\"]"
         for ctx in p3opt.contexts(page):
             try:
+                loc = ctx.locator(sel).first
+                if loc.count() == 0:
+                    continue
                 with page.expect_popup(timeout=T_NAV) as info:
-                    ctx.locator(sel).first.click(timeout=T_CLICK)
+                    loc.click(timeout=T_CLICK)
                 popup = info.value
                 _log(progress, f"  [{SETTING_EDIT_LABEL}] 팝업 열림 (ftid={ftid})")
                 return popup

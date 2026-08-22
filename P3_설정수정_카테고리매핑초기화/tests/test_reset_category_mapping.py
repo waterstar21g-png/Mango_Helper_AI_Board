@@ -53,6 +53,64 @@ def test_delete_selectors_match_screenshot_dom():
 # ── 작업 URL ─────────────────────────────────────────────────────
 
 
+class CountingContext:
+    """count() 를 세는 가짜 프레임 — 없는 요소에서 클릭을 시도하는지 검증용."""
+
+    def __init__(self, has_link: bool):
+        self.has_link = has_link
+        self.count_calls = 0
+        self.click_calls = 0
+
+    def locator(self, selector):
+        return self
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        self.count_calls += 1
+        return 1 if self.has_link else 0
+
+    def click(self, timeout=None):
+        self.click_calls += 1
+        if not self.has_link:
+            raise AssertionError("링크가 없는 프레임에서 click() 을 호출했다")
+
+
+def test_open_setting_popup_checks_count_before_click(monkeypatch):
+    """★관계없는 프레임(광고 iframe 등)에서 헛클릭·헛대기를 하지 않는다.
+
+    count() 로 존재를 먼저 확인하고, 없으면 즉시 다음 프레임으로 넘어가야 한다
+    (클릭을 시도하며 없는 요소를 기다리면 프레임마다 수 초씩 낭비된다).
+    """
+    dead1 = CountingContext(has_link=False)
+    dead2 = CountingContext(has_link=False)
+    live = CountingContext(has_link=True)
+    monkeypatch.setattr(rcm.p3opt, "contexts", lambda page: [dead1, dead2, live])
+
+    class FakePopupInfo:
+        value = "POPUP"
+
+    class FakePage:
+        def expect_popup(self, timeout=None):
+            class Ctx:
+                def __enter__(self):
+                    return FakePopupInfo()
+
+                def __exit__(self, *a):
+                    return False
+
+            return Ctx()
+
+    popup = rcm.open_setting_popup(FakePage(), "670", list_url="https://x/list.php")
+    assert popup == "POPUP"
+    assert dead1.click_calls == 0     # 없는 프레임에서 클릭 시도 안 함
+    assert dead2.click_calls == 0
+    assert live.click_calls == 1
+    assert dead1.count_calls >= 1     # 존재 확인은 했다 (대기 없이)
+
+
 def test_build_popup_url_from_list_url():
     url = rcm.build_popup_url(LIST_URL, "670")
     assert url.startswith("https://tmg1898.cafe24.com/mall/admin/admin_category_set.php")
