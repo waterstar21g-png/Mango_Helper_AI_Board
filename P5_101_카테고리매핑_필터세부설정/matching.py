@@ -73,7 +73,8 @@ SHOE_WORDS = (
 # ★규칙3: 필터명에 이 명칭이 있으면 **그 명칭이 있는 카테고리**에서만 고른다
 ITEM_RULE_WORDS: tuple[str, ...] = ("의류", "잡화", "모자", "선글라스", "액세서리", "신발")
 
-# ★규칙4: 의류는 이 상위 카테고리를 우선한다 (앞일수록 우선)
+# ★규칙4(요건재정의 9): 의류는 이 상위 카테고리를 우선한다 (앞일수록 우선)
+#   성별을 모를 때 기본 순서.
 CLOTHING_PREFERRED: tuple[str, ...] = (
     "패션의류잡화",
     "패션의류",
@@ -82,6 +83,22 @@ CLOTHING_PREFERRED: tuple[str, ...] = (
     "남성의류",
     "여성의류",
 )
+
+
+def clothing_preferred_for(gender: str = "") -> tuple[str, ...]:
+    """★요건재정의 9: "<성별>의류 > 패션의류 > 패션의류잡화" 순으로 우선.
+
+    성별을 모르면 기존 순서(`CLOTHING_PREFERRED`)를 그대로 쓴다.
+    """
+    if not gender:
+        return CLOTHING_PREFERRED
+    gendered = f"{gender}의류"
+    gendered_fashion = f"{gender}패션의류"
+    out = [gendered, gendered_fashion, "패션의류", "패션의류잡화"]
+    for extra in CLOTHING_PREFERRED:
+        if extra not in out:
+            out.append(extra)
+    return tuple(out)
 
 # ★품목 계열 — 계열이 다르면 서로 선택하지 않는다 (의류↔신발, 선글라스↔시계 …)
 CLASS_WORDS: dict[str, tuple[str, ...]] = {
@@ -194,8 +211,15 @@ def _halves(word: str) -> list[str]:
     return [w[:mid], w[mid:]]
 
 
-def low_variants(raw: str) -> list[str]:
-    """하위 조각 전개 — 원문 · 붙인말 · 각 토큰 · 반쪽."""
+def segment_variants(raw: str) -> list[str]:
+    """조각(중위·하위 등) 전개 — 원문 · 연속결합 · 각 토큰 · 첫+끝 결합 · 반쪽.
+
+    ★요건재정의(2026-08-22): 중위·하위 모두 "여러 단어(슬래시·공백 구분)"로
+    올 수 있다 — 예) 중위 "모자/기타잡화/신발" → 모자·기타잡화·신발·
+    모자/기타잡화·기타잡화/신발·모자/기타잡화/신발. 연속된 토큰의 모든
+    부분열(길이가 긴 것부터)을 결합해 만든 후보에, 기존 "첫+끝 결합"
+    (버킷+햇 → 버킷햇)과 긴 토큰의 반쪽 분해를 더한다.
+    """
     raw = str(raw or "").strip()
     if not raw:
         return []
@@ -207,15 +231,29 @@ def low_variants(raw: str) -> list[str]:
         if v and v not in out:
             out.append(v)
 
-    if len(tokens) > 1:
-        add(tokens[0] + tokens[-1])  # 버킷/사파리 햇 → 버킷햇
+    add(raw)
     add(raw.replace(" ", ""))
+
+    n = len(tokens)
+    for length in range(max(n - 1, 1), 0, -1):
+        for start in range(0, n - length + 1):
+            add("".join(tokens[start : start + length]))
+
     for tok in tokens:
         add(tok)
+
+    if n > 1:
+        add(tokens[0] + tokens[-1])  # 버킷/사파리 햇 → 버킷햇
+
     for tok in list(tokens) or [raw]:
         for half in _halves(tok):
             add(half)
     return out
+
+
+def low_variants(raw: str) -> list[str]:
+    """하위 조각 전개 — `segment_variants` 의 별칭 (하위호환)."""
+    return segment_variants(raw)
 
 
 @dataclass
@@ -234,8 +272,19 @@ class ParsedFilter:
 
     @property
     def mids(self) -> list[str]:
-        base = MID_SYNONYMS.get(self.mid, (self.mid,) if self.mid else ())
-        return [m for m in base if m]
+        """중위 후보 — 다중조각 전개(모자/잡화 → 모자·잡화·모자/잡화) + 동의어.
+
+        ★요건재정의(2026-08-22 B-4~9): 중위도 하위처럼 "/" 로 여러 단어를
+        가질 수 있다.
+        """
+        out: list[str] = []
+        for v in segment_variants(self.mid):
+            if v not in out:
+                out.append(v)
+            for syn in MID_SYNONYMS.get(v, ()):
+                if syn not in out:
+                    out.append(syn)
+        return out
 
     @property
     def levels(self) -> int:
@@ -305,10 +354,48 @@ def specificity(path: str, parsed: ParsedFilter) -> tuple[int, int]:
     return (hits, -len(path))
 
 
+# ── 우선순위 규칙 (요건재정의 2026-08-22 · B-9) ──────────────────
+#   남성의류 > 패션의류 > 패션의류잡화 순으로 우선 선택
+#   여성의류 > 패션의류 > 패션의류잡화 순으로 우선 선택
+#   국내 > 해외 순으로 적용
+#   성별 > 골프 / 성별 > 낚시 / 성별 > 스포츠 순으로 우선 적용
+#   남성 > 중성=혼용=공용 순 우선 적용
+#   여성 > 공용=혼용=중성 순 적용
+NEUTRAL_GENDER_WORDS = ("중성", "혼용", "공용", "유니섹스", "남녀")
+OVERSEAS_WORDS = ("해외", "역직구", "해외직구")
+
+
+def priority_rank(path: str, parsed: "ParsedFilter") -> int:
+    """값이 클수록 우선 — 동점일 때 최종 선택 순서를 가른다."""
+    gender = gender_of(parsed.raw)
+    score = 0
+    if gender:
+        # 성별 정확 일치가 중성/혼용/공용보다, 그리고(자동으로) 성별 무관한
+        # 활동명(골프·낚시·스포츠 등)만 일치하는 경로보다 항상 우선한다.
+        if has_gender(path, gender):
+            score += 100
+        elif any(normalize(w) in normalize(path) for w in NEUTRAL_GENDER_WORDS):
+            score += 40
+        gendered_clothing = f"{gender}의류"
+        if path_hit(path, gendered_clothing):
+            score += 8
+        elif path_hit(path, "패션의류잡화"):
+            score += 3
+        elif path_hit(path, "패션의류"):
+            score += 5
+    if not any(path_hit(path, w) for w in OVERSEAS_WORDS):
+        score += 10  # 국내 > 해외
+    return score
+
+
 def pick_best(paths: Sequence[str], parsed: ParsedFilter) -> str:
     if not paths:
         return ""
-    return sorted(paths, key=lambda p: specificity(p, parsed), reverse=True)[0]
+    return sorted(
+        paths,
+        key=lambda p: (priority_rank(p, parsed), *specificity(p, parsed)),
+        reverse=True,
+    )[0]
 
 
 def kind_of(parsed: ParsedFilter) -> str:
@@ -624,9 +711,29 @@ def class_of(text: str) -> str:
     return best
 
 
+def _is_generic_bucket_name(segment: str) -> bool:
+    """이 한 단계 이름 자체가 "패션의류잡화"·"의류잡화" 같은 포괄 버킷인가."""
+    s = normalize(segment)
+    return bool(s) and any(normalize(w) in s for w in GENERIC_CLASS_WORDS)
+
+
 def path_class(path: str) -> str:
-    """카테고리 경로가 드러내는 품목 계열 (없으면 '')."""
-    return class_of(path)
+    """카테고리 경로가 드러내는 품목 계열 (없으면 '').
+
+    ★최상위 단계가 "패션의류잡화"·"의류잡화" 같은 **포괄(잡화) 버킷 이름**
+    이면 그 판정에서 뺀다 — 그 문구 안에 우연히 "의류" 글자가 들어 있어
+    (class_of 는 위치 기반으로 가장 먼저 걸리는 단어를 고른다), 실제로는
+    모자·신발·선글라스인 경로가 전부 "의류" 계열로 잘못 분류되는 사고가
+    났다. 포괄 버킷이 아닌 상위 단계(예: "신발")는 그대로 포함해 계열
+    판정에 쓴다 — 리프 안에서 다른 계열 단어와 뒤섞인 경우(예: "정장샌들")
+    에도 상위 단계의 명확한 계열 표기가 우선하도록 한다.
+    """
+    levels = split_levels(path)
+    if not levels:
+        return class_of(path)
+    if len(levels) > 1 and _is_generic_bucket_name(levels[0]):
+        levels = levels[1:]
+    return class_of(" ".join(levels))
 
 
 def is_generic_path(path: str) -> bool:
@@ -676,19 +783,47 @@ def item_level(path: str, word: str) -> int:
     return 99
 
 
+def item_depth_ratio(path: str, word: str) -> float:
+    """품목명이 나오는 단계의 '깊이 비율' — 1.0=하위(리프) · 0.0=상위.
+
+    경로 길이가 서로 다른 후보들을 상대 비교하려고 절대 인덱스가 아니라
+    비율로 잰다. 못 찾으면 -1.0.
+    """
+    levels = split_levels(path)
+    if not levels:
+        return -1.0
+    idx = -1
+    for i, level in enumerate(levels):
+        if level_hit(level, word):
+            idx = i
+            break
+    if idx < 0:
+        return -1.0
+    if len(levels) == 1:
+        return 1.0
+    return idx / (len(levels) - 1)
+
+
 def item_paths(paths: Sequence[str], words: Sequence[str]) -> list[str]:
-    """★규칙3: 품목명이 있는 경로만, 상위 → 중위 → 하위 순으로 정렬."""
+    """★규칙3(요건재정의 8-3): 품목명이 있는 경로만, **하위 → 중위 → 상위**
+    순으로 우선한다 (품목명이 나오는 단계가 깊을수록/구체적일수록 우선).
+    """
     if not words:
         return list(paths)
-    hits = [p for p in paths if any(item_level(p, w) < 99 for w in words)]
-    if not hits:
+    scored: list[tuple[float, str]] = []
+    for p in paths:
+        ratio = max((item_depth_ratio(p, w) for w in words), default=-1.0)
+        if ratio >= 0:
+            scored.append((ratio, p))
+    if not scored:
         return []
-    return sorted(hits, key=lambda p: (min(item_level(p, w) for w in words), len(p)))
+    scored.sort(key=lambda item: (-item[0], len(item[1])))
+    return [p for _ratio, p in scored]
 
 
-def clothing_priority(paths: Sequence[str]) -> list[str]:
-    """★규칙4: 의류는 패션의류·패션의류잡화·남/여성(패션)의류를 우선."""
-    for preferred in CLOTHING_PREFERRED:
+def clothing_priority(paths: Sequence[str], gender: str = "") -> list[str]:
+    """★규칙4(요건재정의 9): 의류는 <성별>의류 → 패션의류 → 패션의류잡화 순 우선."""
+    for preferred in clothing_preferred_for(gender):
         hits = [p for p in paths if path_hit(p, preferred)]
         if hits:
             return hits
@@ -696,16 +831,17 @@ def clothing_priority(paths: Sequence[str]) -> list[str]:
 
 
 def constrain(paths: Sequence[str], parsed: "ParsedFilter") -> tuple[list[str], list[str]]:
-    """규칙 2·3·4 로 후보를 좁힌다. 반환: (후보, 적용된 규칙 설명)."""
+    """규칙 1·2·3·4 로 후보를 좁힌다. 반환: (후보, 적용된 규칙 설명).
+
+    ★요건재정의(2026-08-22 B-10) 순서: 의류↔신발·선글라스↔시계 같은 계열
+    배타(엄격규칙)를 성별 좁히기보다 **먼저** 적용한다. 성별 좁히기가 먼저
+    적용되면(같은 성별 표기가 있는 후보만 남기는 로직) 성별 표기가 없는
+    다른 계열의 정상 대안이, 성별 표기가 있는 잘못된 계열 후보에 밀려
+    사라질 수 있다 (예: "남성시계" 가 성별 필터를 통과해 "선글라스" 계열
+    배타 검사를 받을 기회조차 없이 살아남는 사고).
+    """
     pool = [p for p in paths if str(p or "").strip()]
     notes: list[str] = []
-
-    gender = gender_of(parsed.raw)
-    if gender:
-        narrowed = gender_paths(pool, gender)
-        if narrowed:
-            pool = narrowed
-            notes.append(f"성별={gender}")
 
     cls = class_of(parsed.raw)
     if cls:
@@ -720,6 +856,13 @@ def constrain(paths: Sequence[str], parsed: "ParsedFilter") -> tuple[list[str], 
         if note:
             notes.append(note)
 
+    gender = gender_of(parsed.raw)
+    if gender:
+        narrowed = gender_paths(pool, gender)
+        if narrowed:
+            pool = narrowed
+            notes.append(f"성별={gender}")
+
     words = item_words_of(parsed)
     if words:
         narrowed = item_paths(pool, words)
@@ -728,12 +871,15 @@ def constrain(paths: Sequence[str], parsed: "ParsedFilter") -> tuple[list[str], 
             notes.append("품목=" + "·".join(words))
 
     if "의류" in words:
-        narrowed = clothing_priority(pool)
+        narrowed = clothing_priority(pool, gender)
         if narrowed and len(narrowed) < len(pool):
             pool = narrowed
-            notes.append("의류 우선순위")
+            notes.append("의류 우선순위" + (f"({gender})" if gender else ""))
 
     return pool, notes
+
+
+MAX_DB_ROUNDS = 3  # ★요건재정의 D-3-6): 2)~5) 과정을 3회 반복 수행한다
 
 
 def find_category(
@@ -742,11 +888,29 @@ def find_category(
     *,
     exclude: Sequence[str] = (),
     force: bool = True,
+    db=None,
 ) -> tuple[str, str]:
-    """최적 카테고리와 그 근거 단계.
+    """최적("최종") 카테고리와 그 근거 단계 — 요건재정의(2026-08-22) D 항 그대로.
 
-    `exclude` 는 이미 시도한 카테고리. `force=True`(기본) 면 규칙으로 못 찾아도
-    소재·용도·성별·활용을 종합해 **가장 가까운 하나를 반드시** 고른다.
+    탐색 순서 (대전제):
+      1) 완전일치 — 망고 필터명(상위·중위·하위)과 엑셀(상위·중위·하위)이 동일
+      2) 하위 카테고리로 엑셀에서 검색 — 1건이면 확정, 0건이면 4)로, 2건 이상이면 3)으로
+      3) 우선순위 조정 — 상위/중위 일치 → OK, 국내/해외 → 국내 OK,
+         그래도 안 되면 정보화DB 로 좁혀보고 4)로
+      4) 포괄성(확장범주) 범위로 찾는다 — 의류/신발/잡화 등 품목별 포괄 카테고리
+      5) 정보화DB(`db`)에서 연관검색어를 찾아 검색어를 확장한다
+      (2)~5) 를 최대 `MAX_DB_ROUNDS`(3)회 반복)
+      6) 그래도 없으면 — "망고 필터명"과 가장 가까운 카테고리 하나를 반드시 지정
+         (소재·재료·용도·성별·활용을 종합 — `force=True`, 기본값)
+
+    절대규칙(예외 없음, 어떤 단계에서도 뚫지 않음):
+      · 반대 성별 카테고리는 어떤 경우에도 고르지 않는다
+      · "브랜드" 가 붙은 카테고리는 어떤 경우에도 확정하지 않는다
+      · 최적 카테고리는 반드시 엑셀 목록 범위 안의 값이어야 한다(호출측 `ensure_from`)
+      · 의류↔신발, 선글라스↔시계(잡화 결합 표기는 예외) 처럼 다른 계열은 섞지 않는다
+
+    `exclude` 는 이미 시도한 카테고리. `db` 는 `category_db.CategoryDB` —
+    5) 단계에서 연관검색어를 찾는 데 쓴다(없으면 5) 단계는 건너뛴다).
     """
     parsed = parse_filter_name(name)
     skip = {normalize(e) for e in (exclude or []) if str(e or "").strip()}
@@ -778,71 +942,93 @@ def find_category(
 
     # ★소프트규칙: 동떨어진 형제 품목은 되도록 고르지 않는다.
     #   예) "맨투맨/후드" 를 찾는데 "패딩"(같은 의류 계열의 다른 구체적
-    #   품목)을 대신 고르면 안 된다. 1)~2-4) 모든 단계가 보는 후보 풀
-    #   자체에서 뺀다 — 나중 단계가 all_paths 로 되돌아가도 다시 새지
-    #   않도록, 이 시점의 all_paths 를 직접 좁힌다. 다만 안전한 후보가
-    #   하나도 없으면(위와 동일한 이유로) 포기하지 않고 원래 후보로
-    #   계속 진행해 "가장 비슷한 것"을 반드시 고른다.
+    #   품목)을 대신 고르면 안 된다. 이후 모든 단계가 보는 후보 풀
+    #   자체에서 뺀다. 다만 안전한 후보가 하나도 없으면(위와 동일한
+    #   이유로) 포기하지 않고 원래 후보로 계속 진행해 "가장 비슷한 것"을
+    #   반드시 고른다.
     if parsed.mid or parsed.lows:
         safe_paths = [p for p in all_paths if not _specific_item_conflict(p, parsed)]
         if safe_paths:
             all_paths = safe_paths
 
-    # ★규칙 2·3·4 — 성별·품목명·의류 우선순위로 후보를 먼저 좁힌다
+    # ★규칙 2·3·4 — 성별·품목명·의류 우선순위(성별 우선)로 후보를 먼저 좁힌다
     paths, notes = constrain(all_paths, parsed)
     tag = (" [" + " · ".join(notes) + "]") if notes else ""
     if not paths:
         paths, tag = all_paths, ""
 
-    # 1) 단계수 동일 — 상위 → 중위 → 하위 순서 대조
+    # 1) 완전일치 — 망고 단계수 == 엑셀 단계수 & 상위·중위·하위 전부 일치
     found = match_by_levels(paths, parsed)
     if found:
-        return found, "1) 단계 일치" + tag
+        return found, "1) 완전일치" + tag
 
-    # 2-1) 상위(없으면 중위) → 중위(없으면 하위) → 하위
-    scope = filter_paths(paths, parsed.tops)
-    step = "2-1) 상위"
-    if not scope:
-        scope = filter_paths(paths, parsed.mids)
-        step = "2-1) 중위(상위 없음)"
-    if scope:
-        narrowed = filter_paths(scope, parsed.mids)
-        if narrowed:
-            step += " → 중위"
-        else:
-            narrowed = filter_paths(scope, parsed.lows)
+    low_terms = list(parsed.lows)
+    mid_terms = list(parsed.mids)
+    tried_db_terms: set[str] = set()
+
+    for round_no in range(1, MAX_DB_ROUNDS + 1):
+        # 2) 하위 카테고리로 엑셀에서 검색
+        low_hits = filter_paths(paths, expand_synonyms(low_terms))
+        low_hits = low_hits or filter_paths(paths, low_terms)
+
+        if len(low_hits) == 1:
+            return low_hits[0], f"2) 하위검색 1건({round_no}회차)" + tag
+
+        if len(low_hits) > 1:
+            # 3) 우선순위 조정 — 상위/중위 일치 → OK
+            narrowed = filter_paths(low_hits, parsed.tops)
+            if not narrowed:
+                narrowed = filter_paths(low_hits, mid_terms)
             if narrowed:
-                step += " → 하위(중위 없음)"
-        if narrowed:
-            low_hits = filter_paths(narrowed, parsed.lows)
-            if low_hits:
-                return pick_best(low_hits, parsed), step + " → 하위" + tag
-            if not parsed.lows:
-                return pick_best(narrowed, parsed), step + tag
+                return (
+                    pick_best(narrowed, parsed),
+                    f"3) 우선순위(상위·중위 일치, {round_no}회차)" + tag,
+                )
+            # 국내/해외 → 국내 OK
+            domestic = [p for p in low_hits if not any(path_hit(p, w) for w in OVERSEAS_WORDS)]
+            if domestic and len(domestic) < len(low_hits):
+                return (
+                    pick_best(domestic, parsed),
+                    f"3) 우선순위(국내, {round_no}회차)" + tag,
+                )
+            # 정보화DB 로도 못 좁히면 그 안에서 가장 그럴듯한 것 하나
+            return (
+                pick_best(low_hits, parsed),
+                f"3) 우선순위(정보화DB 조회, {round_no}회차)" + tag,
+            )
 
-    # 2-2) ★하위(1차) 이름으로 전체 재검색
-    low_hits = filter_paths(paths, expand_synonyms(parsed.lows))
-    if low_hits:
-        mid_hits = filter_paths(low_hits, parsed.mids)
+        # 하위 검색 0건 → 요건 D-11: 하위(1차) 없으면 중위(2차)로 전체 재검색
+        mid_hits = filter_paths(paths, mid_terms)
         if mid_hits:
-            return pick_best(mid_hits, parsed), "2-2) 하위 전체 → 중위" + tag
-        return pick_best(low_hits, parsed), "2-2) 하위 전체" + tag
+            return pick_best(mid_hits, parsed), f"3) 중위 2차검색({round_no}회차)" + tag
 
-    # 2-3) 중위(2차) 이름으로 전체 재검색
-    mid_hits = filter_paths(paths, parsed.mids)
-    if mid_hits:
-        return pick_best(mid_hits, parsed), "2-3) 중위 전체" + tag
+        # 4) 포괄성(확장범주) 범위로 찾는다
+        kind = kind_of(parsed)
+        generic = filter_paths(paths, GENERIC_BY_KIND.get(kind, ()))
+        if generic:
+            narrowed = filter_paths(generic, low_terms) or filter_paths(generic, mid_terms)
+            target = narrowed or generic
+            return pick_best(target, parsed), f"4) 확장범주({kind}, {round_no}회차)" + tag
 
-    # 2-4) 품목별 포괄 카테고리
-    kind = kind_of(parsed)
-    generic = filter_paths(paths, GENERIC_BY_KIND.get(kind, ()))
-    if generic:
-        narrowed = filter_paths(generic, parsed.lows) or filter_paths(generic, parsed.mids)
-        target = narrowed or generic
-        return pick_best(target, parsed), f"2-4) 포괄({kind})" + tag
+        # 5) 정보화DB에서 연관검색어를 찾아 검색어를 확장하고 다음 회차로
+        if db is None:
+            break
+        new_terms: list[str] = []
+        for term in [*low_terms, *mid_terms]:
+            key = normalize(term)
+            if not term or key in tried_db_terms:
+                continue
+            tried_db_terms.add(key)
+            for related in db.related_terms(term):
+                if related not in low_terms and related not in new_terms:
+                    new_terms.append(related)
+        if not new_terms:
+            break
+        low_terms = [*low_terms, *new_terms]
 
+    # 6) 그래도 없으면 — 망고 필터명과 가장 가까운 카테고리 하나를 반드시 지정
     if force:
         nearest, score = nearest_category(name, paths)
         if nearest:
-            return nearest, f"3) 최근접 지정 ({score:.2f})" + tag
+            return nearest, f"6) 근접매핑 강제지정 ({score:.2f})" + tag
     return "", "미검출"
