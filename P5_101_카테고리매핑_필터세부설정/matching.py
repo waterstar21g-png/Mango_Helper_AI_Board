@@ -397,6 +397,60 @@ def expand_synonyms(names: Sequence[str]) -> list[str]:
     return out
 
 
+# ★DB화 — 클래스별 "구체적 하위 품목명". 이 목록에 있는 말들은 서로 형제
+# 관계이며, 검색해서 없을 때 서로를 대신 골라서는 안 된다.
+#   예) 신발(찾는 것) → 구두(형제 품목) NOT-OK · 신발 → 잡화(상위/일반) OK
+#       양말(찾는 것) → 티셔츠(형제 품목) NOT-OK · 양말 → 기타의류(일반) OK
+SPECIFIC_ITEM_WORDS: dict[str, tuple[str, ...]] = {
+    "신발": (
+        "운동화", "스니커즈", "구두", "부츠", "샌들", "슬리퍼",
+        "활동화", "스포츠화", "워커",
+    ),
+    "의류": (
+        "티셔츠", "셔츠", "니트", "코트", "자켓", "재킷", "청바지",
+        "원피스", "스커트", "정장", "양말",
+        *OUTER_SUBTYPES, *PANTS_SUBTYPES,
+    ),
+    "모자": (
+        "캡", "비니", "버킷햇", "벙거지", "야구모자", "헌팅캡", "베레모",
+        "페도라", "사파리햇", "트루퍼", "바라클라바",
+    ),
+    "가방": ("백팩", "크로스백", "토트백", "숄더백", "지갑"),
+    "액세서리": ("주얼리", "목걸이", "귀걸이", "반지", "팔찌", "브로치"),
+    "뷰티": (
+        "스킨케어", "마스크팩", "베이스메이크업", "립메이크업", "아이메이크업",
+        "네일", "프레그런스", "선케어", "클렌징", "필링", "헤어케어", "바디케어",
+        "쉐이빙", "제모",
+    ),
+    "속옷": ("홈웨어", "여성속옷상의", "여성속옷하의", "여성속옷세트"),
+}
+
+# ★DB화 — 검색해서 없을 때 "안전하게" 물러날 수 있는 일반화(상위) 폴백어.
+# 형제 품목으로 새지 않고 반드시 이 안의 더 넓은 카테고리로만 물러난다.
+SAFE_FALLBACK_WORDS = GENERIC_CLASS_WORDS + (
+    "신발잡화", "기타신발", "기타의류", "기타모자", "기타가방", "기타", "잡화기타",
+)
+
+
+def _specific_item_conflict(path: str, parsed: "ParsedFilter") -> bool:
+    """path 가 **찾는 것과 다른** 형제 품목이면 True — 근접 후보에서 제외한다.
+
+    안전한 일반화 단어(잡화·기타의류 등)가 함께 있으면 형제 품목이라도
+    막지 않는다 — '기타 신발(운동화 아님)' 처럼 안내성 표기일 수 있어서다.
+    """
+    if any(path_hit(path, w) for w in SAFE_FALLBACK_WORDS):
+        return False
+    wanted = {normalize(n) for n in expand_synonyms([parsed.mid, *parsed.lows]) if n}
+    for words in SPECIFIC_ITEM_WORDS.values():
+        for w in words:
+            if not path_hit(path, w):
+                continue
+            if normalize(w) in wanted:
+                continue  # 찾는 것과 같은 품목 — 형제 아님
+            return True
+    return False
+
+
 def nearest_score(parsed: "ParsedFilter", path: str) -> float:
     """소재·용도·성별·활용·동의어를 종합한 근접도 (0~1)."""
     leaf = leaf_of(path)
@@ -442,12 +496,20 @@ def nearest_score(parsed: "ParsedFilter", path: str) -> float:
 
 
 def nearest_category(name: str, paths: Sequence[str]) -> tuple[str, float]:
-    """규칙으로 못 찾았을 때 — **반드시 하나**를 고른다 (가장 가까운 것)."""
+    """규칙으로 못 찾았을 때 — 가능하면 하나를 고른다 (가장 가까운 것).
+
+    ★절대규칙: 동떨어진 형제 품목(예: 신발을 찾는데 구두로 새는 것)은 절대
+    고르지 않는다 — 성별 규칙과 동일하게, 안전한 후보가 하나도 없으면
+    빈 값을 돌려준다("오매핑보다 미매핑이 낫다"). 안전한 후보(같은 품목·
+    일반화 버킷·무관 카테고리)가 하나라도 있으면 그중에서 가장 가까운 것을
+    고른다.
+    """
     parsed = parse_filter_name(name)
+    candidates = [p for p in paths if str(p or "").strip()]
+    safe = [p for p in candidates if not _specific_item_conflict(p, parsed)]
+
     best, best_score = "", -1.0
-    for path in paths:
-        if not str(path or "").strip():
-            continue
+    for path in safe:
         score = nearest_score(parsed, path)
         if score > best_score or (score == best_score and best and len(path) < len(best)):
             best, best_score = path, score

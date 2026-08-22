@@ -665,3 +665,55 @@ def test_hat_filter_excludes_other_classes():
     cats = ["모자 > 페도라", "의류 > 니트", "신발 > 운동화"]
     cat, step = mt.find_category("남성-모자-페도라", cats)
     assert cat == "모자 > 페도라"
+
+
+# ── DB화 — 동떨어진 형제 품목 금지, 일반화(상위) 폴백만 허용 ──────
+
+
+def test_shoe_filter_never_falls_back_to_sibling_shoe_type():
+    """★신발 -> 구두 는 NOT-OK. 구두만 있으면 매핑하지 않는다."""
+    cat, step = mt.find_category("남성-신발", ["구두 전용관"])
+    assert cat == ""
+    assert step == "미검출"
+
+
+def test_shoe_filter_falls_back_to_generic_bucket():
+    """신발 -> 잡화 는 OK."""
+    cat, step = mt.find_category("남성-신발", ["구두 전용관", "남성 잡화"])
+    assert cat == "남성 잡화"
+
+
+def test_socks_filter_never_falls_back_to_tshirt():
+    """★양말 -> 티셔츠 는 NOT-OK. 티셔츠만 있으면 매핑하지 않는다."""
+    cat, step = mt.find_category("남성-양말", ["남성 티셔츠 전문관"])
+    assert cat == ""
+
+
+def test_socks_filter_falls_back_to_other_clothing_bucket():
+    """양말 -> 기타의류 는 OK."""
+    cat, step = mt.find_category("남성-양말", ["남성 티셔츠 전문관", "남성 기타의류"])
+    assert cat == "남성 기타의류"
+
+
+def test_sneakers_filter_never_falls_back_to_opposite_gender_sneakers():
+    """★남성스니커즈 -> 여성스니커즈 는 NOT-OK (성별 규칙으로도 이미 배제됨)."""
+    cat, step = mt.find_category("남성-신발-스니커즈", ["여성스니커즈"])
+    assert cat == ""
+
+
+def test_sneakers_filter_falls_back_to_same_gender_shoe_bucket():
+    """남성스니커즈 -> 남성신발 은 OK (같은 성별의 더 넓은 신발 카테고리)."""
+    cat, step = mt.find_category("남성-신발-스니커즈", ["여성스니커즈", "남성신발"])
+    assert cat == "남성신발"
+
+
+def test_specific_item_conflict_ignores_safe_fallback_words():
+    """안전한 일반화 단어(잡화 등)가 함께 있으면 형제 품목이라도 막지 않는다."""
+    parsed = mt.parse_filter_name("남성-신발")
+    assert mt._specific_item_conflict("잡화기타 (구두 포함)", parsed) is False
+
+
+def test_specific_item_conflict_allows_same_target_item():
+    """찾는 것과 같은 품목이면 형제 충돌로 보지 않는다."""
+    parsed = mt.parse_filter_name("남성-신발-구두")
+    assert mt._specific_item_conflict("남성 구두", parsed) is False
