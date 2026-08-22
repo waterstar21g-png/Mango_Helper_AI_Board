@@ -62,9 +62,13 @@ def test_search_keyword_is_full_confirmed_name():
     엑셀은 망고 전체 카테고리를 그대로 내려받은 것이라, 확정값 전체로
     검색해야 그 마켓 안에서 유일하게 하나만 걸린다. 리프 하나("비니")만
     쓰면 같은 리프를 쓰는 다른 상위 카테고리까지 걸려 여러 개가 나온다.
+
+    ★요건: 상위·중위·하위·세부·상세 단계는 공백 한 글자씩으로 이어붙인다
+    (예: "남자-하의-팬츠-한무-두모" → "남자 하의 팬츠 한무 두모").
     """
-    assert mc.search_keyword_for("A > B > 비니") == "A > B > 비니"
-    assert mc.search_keyword_for("  A > B  ") == "A > B"
+    assert mc.search_keyword_for("A > B > 비니") == "A B 비니"
+    assert mc.search_keyword_for("남자 > 하의 > 팬츠 > 한무 > 두모") == "남자 하의 팬츠 한무 두모"
+    assert mc.search_keyword_for("  A > B  ") == "A B"
     assert mc.search_keyword_for("") == ""
 
 
@@ -248,7 +252,7 @@ def test_map_one_market_searches_mango_exactly_once(monkeypatch):
     assert item.ok is True
     assert item.category == target
     fills = [a[2] for a in popup.actions if a[0] == "fill"]
-    assert fills == [target]              # 검색 딱 한 번, 검색어=확정값 전체
+    assert fills == ["패션의류잡화 남성신발 로퍼"]  # 검색 딱 한 번, 단계는 공백으로 이음
     clicks = [a for a in popup.actions if a[0] == "click"]
     assert len(clicks) == 1
 
@@ -273,7 +277,7 @@ def test_map_one_market_full_sequence():
     assert item.category == target
     kinds = [a[0] for a in popup.actions]
     assert kinds == ["fill", "click", "select"]      # 입력 → 검색 → 선택
-    assert popup.actions[0][2] == target              # 검색어 = 확정값 전체
+    assert popup.actions[0][2] == "패션의류/잡화 남성패션 남성잡화 모자 비니"  # 공백으로 이음
     assert popup.actions[1][1] == "searchbtn_AUC20"
     assert popup.actions[2][2] == target
 

@@ -365,8 +365,14 @@ def search_keyword_for(category_path: str) -> str:
     걸려 나온다 — 확정된 전체 이름으로 검색해야 그 마켓 안에서 유일하게
     하나만 나온다. 망고에서는 검색·선택이 아니라 확정된 값을 그대로
     "제출"하는 것뿐이다.
+
+    ★요건: 상위·중위·하위·세부·상세 단계를 묶어 검색할 때, 단계 사이에
+    공백을 **한 글자씩** 두고 입력한다.
+    예) "남자-하의-팬츠-한무-두모" → "남자 하의 팬츠 한무 두모"
+    (내부 표기의 " > " 구분자를 공백 하나로 바꾼다.)
     """
-    return str(category_path or "").strip()
+    levels = [p.strip() for p in str(category_path or "").split(">") if p.strip()]
+    return " ".join(levels)
 
 
 def pick_option(options: Sequence[str], category_path: str) -> str:
