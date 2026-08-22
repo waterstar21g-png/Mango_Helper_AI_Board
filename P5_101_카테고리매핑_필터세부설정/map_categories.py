@@ -1090,6 +1090,26 @@ def unmapped_markets(popup, codes: Sequence[str]) -> list[str]:
     return out
 
 
+def anomalous_gender_markets(
+    popup, codes: Sequence[str], filter_name: str
+) -> dict[str, str]:
+    """★[검색필터 설정저장] 후 실제 저장된 값 재검증 — 반대 성별로 매핑된 마켓.
+
+    `openmarket_cm_category_name_<코드>` 에 실제 저장된 카테고리 **이름**을
+    읽어(추측이 아니라 저장 후 화면에 남은 값 그대로) `matching.violates_gender`
+    로 재검사한다. 반대 성별이면 {마켓코드: 저장된 이름} 으로 돌려준다.
+    """
+    state = mapped_state(popup, codes)
+    if not state:
+        return {}
+    out: dict[str, str] = {}
+    for code in codes:
+        name = str((state.get(code) or {}).get("name") or "").strip()
+        if name and matching.violates_gender(name, filter_name):
+            out[code] = name
+    return out
+
+
 def map_one_row(
     page,
     row: RowInfo,
@@ -1208,6 +1228,50 @@ def map_one_row(
                     progress,
                     "  경고: 재검증 3회 후에도 미매핑 — "
                     + " · ".join(MARKETS.get(m, m) for m in left),
+                    major=True,
+                )
+
+        # ★요건: [검색필터 설정저장] 후 실제 저장된 카테고리매핑이 이상(반대
+        #   성별)인지 다시 확인 — 저장 화면에 남은 값으로 재검사한다.
+        for round_no in range(1, VERIFY_ROUNDS + 1):
+            bad = anomalous_gender_markets(popup, codes, row.filter_name)
+            if not bad:
+                if round_no > 1:
+                    _log(progress, "  성별 재검증 — 이상 없음 확인", major=True)
+                break
+            names = " · ".join(f"{MARKETS.get(m, m)}={n}" for m, n in bad.items())
+            _log(
+                progress,
+                f"  ⚠ 성별 이상 재검증 {round_no}/{VERIFY_ROUNDS} — {names}",
+                major=True,
+            )
+            for market, bad_name in bad.items():
+                if stop_requested():
+                    break
+                variant = variants_for(market, (variant_choice or {}).get(market, ""))[0]
+                retry = map_one_market(
+                    popup,
+                    market,
+                    row.filter_name,
+                    excels.get(market, []),
+                    variant=variant,
+                    exclude=[bad_name],
+                    progress=progress,
+                )
+                record = dict(retry.__dict__)
+                record["variant"] = variant
+                record["gender_retry_round"] = round_no
+                detail["items"].append(record)
+            click_config_save(popup, progress=progress)
+            time.sleep(GAP)
+        else:
+            left_bad = anomalous_gender_markets(popup, codes, row.filter_name)
+            if left_bad:
+                detail["gender_anomaly"] = left_bad
+                _log(
+                    progress,
+                    "  경고: 재검증 3회 후에도 성별 이상 — "
+                    + " · ".join(f"{MARKETS.get(m, m)}={n}" for m, n in left_bad.items()),
                     major=True,
                 )
     finally:

@@ -773,6 +773,42 @@ def test_unmapped_markets_empty_when_state_unavailable():
     assert mc.unmapped_markets(Broken(), ["AUC20"]) == []
 
 
+# ── 저장 후 재검증 — 성별 이상 (요건: 검색필터 설정저장 후 매핑 정보 재확인) ──
+
+
+def test_anomalous_gender_markets_detects_opposite_gender_save():
+    """★[검색필터 설정저장] 뒤 실제 저장된 이름이 반대 성별이면 잡아낸다."""
+    popup = StatePopup(
+        {
+            "AUC20": {"code": "1", "name": "여성패션 > 여성 브이넥"},   # 반대(남성 필터)
+            "11ST": {"code": "2", "name": "남성패션 > 남성 니트"},       # 정상
+            "GMK20": {"code": "3", "name": "공용 > 모자"},               # 성별무관 정상
+        }
+    )
+    bad = mc.anomalous_gender_markets(popup, ["AUC20", "11ST", "GMK20"], "아름트리-무신사-남성-니트")
+    assert bad == {"AUC20": "여성패션 > 여성 브이넥"}
+
+
+def test_anomalous_gender_markets_catches_implicit_female_words():
+    """★'임부복' 처럼 '여성' 글자가 없는 여성 전용 카테고리도 잡아낸다."""
+    popup = StatePopup({"AUC20": {"code": "1", "name": "임부복"}})
+    bad = mc.anomalous_gender_markets(popup, ["AUC20"], "아름트리-무신사-남성-상의")
+    assert bad == {"AUC20": "임부복"}
+
+
+def test_anomalous_gender_markets_empty_when_no_gender_filter():
+    popup = StatePopup({"AUC20": {"code": "1", "name": "여성패션"}})
+    assert mc.anomalous_gender_markets(popup, ["AUC20"], "브랜드-사이트-니트") == {}
+
+
+def test_anomalous_gender_markets_empty_when_state_unavailable():
+    class Broken:
+        def evaluate(self, *a, **k):
+            raise RuntimeError("no")
+
+    assert mc.anomalous_gender_markets(Broken(), ["AUC20"], "여성-니트") == {}
+
+
 def test_verify_rounds_constant():
     assert mc.VERIFY_ROUNDS == 3
     assert mc.MAP_RETRIES == 3

@@ -426,3 +426,50 @@ def test_mid_used_when_low_absent():
     cat, step = mt.find_category("아름트리-무신사-남성-모자-비니", cats)
     assert cat == "패션 > 모자 > 기타"
     assert "중위" in step or "2-1" in step
+
+
+def test_maternity_category_counts_as_female_even_without_the_word():
+    """★'임부복' 처럼 '여성' 글자가 없어도 여성 전용 카테고리다.
+
+    남성 필터에 마땅한 남성 카테고리가 없을 때, 이런 카테고리를 '성별 무관'
+    으로 보고 최근접 후보로 골라버리면 오매칭이 된다.
+    """
+    assert mt.gender_of("임부복") == "여성"
+    assert mt.gender_of("임산부 원피스") == "여성"
+    assert mt.has_gender("임부복", "여성") is True
+
+    cats = ["임부복", "생활용품"]
+    cat, step = mt.find_category("아름트리-무신사-남성-상의-니트", cats)
+    assert cat != "임부복"          # 남성 필터가 임부복을 고르면 안 된다
+    assert cat == "생활용품"
+
+
+def test_gender_leakage_reported_examples():
+    """사용자가 지적한 실제 사례 — 남성 필터에 임부복·여성패션·여성브이넥 배제,
+    여성 필터에 남성복·남성패션·남성니트 배제."""
+    cats = ["임부복", "여성패션", "여성 브이넥", "남성복", "남성패션", "남성 니트"]
+
+    male_cat, _ = mt.find_category("아름트리-무신사-남성-상의-니트", cats)
+    assert male_cat not in ("임부복", "여성패션", "여성 브이넥")
+
+    female_cat, _ = mt.find_category("아름트리-무신사-여성-상의-니트", cats)
+    assert female_cat not in ("남성복", "남성패션", "남성 니트")
+
+
+def test_gender_of_recognizes_implicit_female_words():
+    """★'임부복' 처럼 '여성' 글자가 없어도 여성 전용 카테고리로 인식한다.
+
+    없으면 남성 필터에서 마땅한 남성 카테고리가 없을 때 최근접 단계가
+    성별무관으로 보고 임부복 을 그냥 골라버린다 (실제 오매칭 사례).
+    """
+    assert mt.gender_of("임부복") == "여성"
+    assert mt.gender_of("임산부 원피스") == "여성"
+    assert mt.gender_of("마터니티 룩") == "여성"
+
+
+def test_male_filter_never_falls_back_to_maternity_category():
+    cats = ["임부복", "생활용품"]
+    cat, step = mt.find_category("아름트리-무신사-남성-상의-니트", cats)
+    assert cat != "임부복"
+    assert cat == "생활용품"
+    assert step.startswith("3) 최근접")
