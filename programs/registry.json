@@ -115,6 +115,16 @@
       "board_tab": "p5_101",
       "login": "더망고 (Chrome CDP 9222)",
       "description": "체크된 필터마다 마켓 카테고리 자동 매핑 (엑셀 기준)"
+    },
+    {
+      "id": "p3_reset_mapping",
+      "name": "P3_설정수정_카테고리매핑초기화",
+      "folder": "P3_설정수정_카테고리매핑초기화",
+      "script": "reset_category_mapping.py",
+      "launcher": "run.bat",
+      "board_tab": "p3_reset",
+      "login": "더망고 (Chrome CDP 9222)",
+      "description": "지정 행 범위의 카테고리매핑 설정 일괄 초기화 (되돌릴 수 없음)"
     }
   ]
 }

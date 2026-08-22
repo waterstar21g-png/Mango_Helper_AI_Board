@@ -45,6 +45,11 @@ p5_mapping = _load_py_module(
     "p5_101_map_categories", "P5_101_카테고리매핑_필터세부설정", "map_categories.py"
 )
 p3_fitcl = _load_py_module("p3_fitcl_detail", "P3_핏클상세페이지", "fitcl_detail.py")
+p3_reset_mapping = _load_py_module(
+    "p3_reset_category_mapping",
+    "P3_설정수정_카테고리매핑초기화",
+    "reset_category_mapping.py",
+)
 
 from library import (  # noqa: E402
     add_paths,
@@ -110,6 +115,7 @@ class BoardApp(tk.Tk):
         self._p2_proc: subprocess.Popen | None = None
         self._p3_proc: subprocess.Popen | None = None
         self._p3_option_proc: subprocess.Popen | None = None
+        self._p3_reset_proc: subprocess.Popen | None = None
         self._p3_option_reload_busy = False
         self._p5_proc: subprocess.Popen | None = None
         self._p5_101_proc: subprocess.Popen | None = None
@@ -205,6 +211,16 @@ class BoardApp(tk.Tk):
         )
         self.btn_p3_option.pack(fill="x", padx=6, pady=6)
 
+        self.btn_p3_reset = tk.Button(
+            side,
+            text="P3_설정수정\n카테고리매핑초기화",
+            command=lambda: self._show("p3_reset"),
+            font=("Malgun Gothic", 9, "bold"),
+            relief="groove",
+            pady=10,
+        )
+        self.btn_p3_reset.pack(fill="x", padx=6, pady=6)
+
         self.btn_p5 = tk.Button(
             side,
             text="P5_카테고리\n엑셀추출",
@@ -277,6 +293,7 @@ class BoardApp(tk.Tk):
         self.frame_p2 = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
         self.frame_p3 = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
         self.frame_p3_option = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
+        self.frame_p3_reset = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
         self.frame_p5 = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
         self.frame_p5_101 = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
         self.frame_p3_fitcl = tk.Frame(self.main, bg="#f1f5f9", padx=12, pady=10)
@@ -285,6 +302,7 @@ class BoardApp(tk.Tk):
         self._build_p2(self.frame_p2)
         self._build_p3(self.frame_p3)
         self._build_p3_option(self.frame_p3_option)
+        self._build_p3_reset(self.frame_p3_reset)
         self._build_p5(self.frame_p5)
         self._build_p5_101(self.frame_p5_101)
         self._build_p3_fitcl(self.frame_p3_fitcl)
@@ -295,6 +313,7 @@ class BoardApp(tk.Tk):
         self.frame_p2.pack_forget()
         self.frame_p3.pack_forget()
         self.frame_p3_option.pack_forget()
+        self.frame_p3_reset.pack_forget()
         self.frame_p5.pack_forget()
         self.frame_p5_101.pack_forget()
         self.frame_p3_fitcl.pack_forget()
@@ -303,6 +322,7 @@ class BoardApp(tk.Tk):
         self.btn_p2.configure(bg="#ececec")
         self.btn_p3.configure(bg="#ececec")
         self.btn_p3_option.configure(bg="#ececec")
+        self.btn_p3_reset.configure(bg="#ececec")
         self.btn_p5.configure(bg="#ececec")
         self.btn_p5_101.configure(bg="#ececec")
         self.btn_p3_fitcl.configure(bg="#ececec")
@@ -318,6 +338,9 @@ class BoardApp(tk.Tk):
         elif which == "p3_option":
             self.frame_p3_option.pack(fill="both", expand=True)
             self.btn_p3_option.configure(bg="#dbeafe")
+        elif which == "p3_reset":
+            self.frame_p3_reset.pack(fill="both", expand=True)
+            self.btn_p3_reset.configure(bg="#dbeafe")
         elif which == "p5":
             self.frame_p5.pack(fill="both", expand=True)
             self.btn_p5.configure(bg="#dbeafe")
@@ -3761,6 +3784,261 @@ class BoardApp(tk.Tk):
                     parent=self,
                 ):
                     open_shot_viewer(self, shot_dir=folder, root=ROOT)
+
+    # ── P3_설정수정_카테고리매핑초기화 ────────────────────────────────
+    def _build_p3_reset(self, parent: tk.Frame) -> None:
+        tk.Label(
+            parent,
+            text="P3_설정수정_카테고리매핑초기화 — 지정 행 범위의 카테고리매핑 설정을 초기화 (되돌릴 수 없음)",
+            bg="#f1f5f9",
+            font=("Malgun Gothic", 10, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        form = tk.LabelFrame(parent, text="입력", bg="#ffffff", padx=8, pady=6)
+        form.pack(fill="x")
+
+        r0 = tk.Frame(form, bg="#ffffff")
+        r0.pack(fill="x", pady=3)
+        tk.Label(r0, text="사이트명", width=13, anchor="w", bg="#ffffff").pack(side="left")
+        self.var_p3rst_site = tk.StringVar(value="")
+        tk.Entry(r0, textvariable=self.var_p3rst_site, width=28).pack(side="left")
+        tk.Label(
+            r0,
+            text="(비우면 현재 선택 유지)",
+            bg="#ffffff",
+            fg="#64748b",
+            font=("Malgun Gothic", 8),
+        ).pack(side="left", padx=6)
+
+        r1 = tk.Frame(form, bg="#ffffff")
+        r1.pack(fill="x", pady=3)
+        tk.Label(r1, text="작업 URL", width=13, anchor="w", bg="#ffffff").pack(side="left")
+        self.var_p3rst_url = tk.StringVar(value=p3_reset_mapping.DEFAULT_LIST_URL)
+        tk.Entry(r1, textvariable=self.var_p3rst_url).pack(side="left", fill="x", expand=True)
+
+        r2 = tk.Frame(form, bg="#ffffff")
+        r2.pack(fill="x", pady=3)
+        tk.Label(r2, text="작업행 범위", width=13, anchor="w", bg="#ffffff").pack(side="left")
+        self.var_p3rst_from = tk.StringVar(value=str(p3_reset_mapping.DEFAULT_ROW_FROM))
+        tk.Entry(r2, textvariable=self.var_p3rst_from, width=6).pack(side="left")
+        tk.Label(r2, text="부터", bg="#ffffff").pack(side="left", padx=(4, 10))
+        self.var_p3rst_to = tk.StringVar(value=str(p3_reset_mapping.DEFAULT_ROW_TO))
+        tk.Entry(r2, textvariable=self.var_p3rst_to, width=6).pack(side="left")
+        tk.Label(r2, text="까지", bg="#ffffff").pack(side="left", padx=(4, 10))
+        tk.Label(
+            r2,
+            text="※ 위 「작업 URL」 검색결과의 행 번호 기준 (1부터, 양끝 포함)",
+            bg="#ffffff",
+            fg="#64748b",
+            font=("Malgun Gothic", 8),
+        ).pack(side="left")
+
+        actions = tk.Frame(parent, bg="#f1f5f9")
+        actions.pack(fill="x", pady=8)
+        tk.Button(
+            actions,
+            text="행 목록 확인",
+            command=self._check_p3rst_rows,
+            bg="#0f766e",
+            fg="white",
+            font=("Malgun Gothic", 9, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side="left", padx=(0, 6))
+        tk.Button(
+            actions,
+            text="초기화 시작",
+            command=self._run_p3_reset,
+            bg="#b91c1c",
+            fg="white",
+            font=("Malgun Gothic", 9, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side="left")
+        tk.Button(
+            actions,
+            text="작업중단",
+            command=self._stop_p3_reset,
+            bg="#6b7280",
+            fg="white",
+            font=("Malgun Gothic", 9, "bold"),
+            padx=12,
+            pady=4,
+        ).pack(side="left", padx=6)
+
+        tk.Label(
+            parent,
+            text="⚠ 되돌릴 수 없는 초기화 작업입니다. [행 목록 확인] 으로 대상을 먼저 확인하세요.",
+            bg="#f1f5f9",
+            fg="#b91c1c",
+            font=("Malgun Gothic", 8, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 4))
+
+        log_frame = tk.LabelFrame(parent, text="실행 로그", bg="#ffffff", padx=6, pady=4)
+        log_frame.pack(fill="both", expand=True)
+        self.p3_reset_log = tk.Text(
+            log_frame, height=16, font=("Consolas", 9), wrap="word", bg="#0f172a", fg="#e2e8f0"
+        )
+        sbr = tk.Scrollbar(log_frame, command=self.p3_reset_log.yview)
+        self.p3_reset_log.configure(yscrollcommand=sbr.set)
+        self.p3_reset_log.pack(side="left", fill="both", expand=True)
+        sbr.pack(side="right", fill="y")
+
+        self.p3_reset_status = tk.Label(parent, text="", bg="#f1f5f9", anchor="w")
+        self.p3_reset_status.pack(fill="x", pady=4)
+
+    def _p3_reset_stop_flag(self) -> Path:
+        return ROOT / "P3_설정수정_카테고리매핑초기화" / ".reset_stop"
+
+    def _append_p3_reset_log(self, line: str) -> None:
+        text = (line or "").strip()
+        if text.startswith("##MAIN##"):
+            text = text[8:]
+        self.p3_reset_log.insert("end", text + "\n")
+        self.p3_reset_log.see("end")
+
+    def _p3_reset_script(self) -> Path:
+        return ROOT / "P3_설정수정_카테고리매핑초기화" / "reset_category_mapping.py"
+
+    def _p3_reset_popen(self, extra_args: list[str]) -> subprocess.Popen:
+        args = [sys.executable, str(self._p3_reset_script()), *extra_args]
+        creationflags = 0
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        return subprocess.Popen(
+            args,
+            cwd=str(ROOT / "P3_설정수정_카테고리매핑초기화"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+            env=env,
+            creationflags=creationflags,
+        )
+
+    def _p3_reset_common_args(self) -> list[str]:
+        args: list[str] = []
+        site = self.var_p3rst_site.get().strip()
+        if site:
+            args.extend(["--site-id", site])
+        url = self.var_p3rst_url.get().strip()
+        if url:
+            args.extend(["--list-url", url])
+        row_from = self.var_p3rst_from.get().strip() or str(p3_reset_mapping.DEFAULT_ROW_FROM)
+        row_to = self.var_p3rst_to.get().strip() or str(p3_reset_mapping.DEFAULT_ROW_TO)
+        args.extend(["--row-from", row_from, "--row-to", row_to])
+        return args
+
+    def _check_p3rst_rows(self) -> None:
+        if self._p3_reset_proc and self._p3_reset_proc.poll() is None:
+            messagebox.showwarning("실행 중", "이미 작업이 진행 중입니다.")
+            return
+        if not self._p3_reset_script().is_file():
+            messagebox.showerror("오류", f"실행 파일 없음:\n{self._p3_reset_script()}")
+            return
+
+        self.p3_reset_log.delete("1.0", "end")
+        self.p3_reset_status.configure(text="행 목록 확인 중…", fg="#0f766e")
+        try:
+            self._p3_reset_proc = self._p3_reset_popen(
+                ["--list-rows", *self._p3_reset_common_args()]
+            )
+        except Exception as e:
+            messagebox.showerror("실행 실패", str(e))
+            return
+        threading.Thread(
+            target=self._watch_p3_reset_proc, args=(self._p3_reset_proc,), daemon=True
+        ).start()
+
+    def _run_p3_reset(self) -> None:
+        if self._p3_reset_proc and self._p3_reset_proc.poll() is None:
+            messagebox.showwarning("실행 중", "이미 작업이 진행 중입니다.")
+            return
+        if not self._p3_reset_script().is_file():
+            messagebox.showerror("오류", f"실행 파일 없음:\n{self._p3_reset_script()}")
+            return
+
+        row_from = self.var_p3rst_from.get().strip()
+        row_to = self.var_p3rst_to.get().strip()
+        if not messagebox.askyesno(
+            "되돌릴 수 없는 초기화",
+            f"작업 행 {row_from}~{row_to} 의 카테고리매핑 설정을 초기화합니다.\n"
+            "이 작업은 되돌릴 수 없습니다. 계속할까요?",
+        ):
+            return
+
+        try:
+            self._p3_reset_stop_flag().unlink(missing_ok=True)  # type: ignore[call-arg]
+        except Exception:
+            pass
+
+        self.p3_reset_log.delete("1.0", "end")
+        self.p3_reset_status.configure(
+            text=f"초기화 시작 — {row_from}~{row_to}행", fg="#b91c1c"
+        )
+        try:
+            self._p3_reset_proc = self._p3_reset_popen(self._p3_reset_common_args())
+        except Exception as e:
+            messagebox.showerror("실행 실패", str(e))
+            self.p3_reset_status.configure(text=f"실행 실패: {e}", fg="#b91c1c")
+            return
+        threading.Thread(
+            target=self._watch_p3_reset_proc, args=(self._p3_reset_proc,), daemon=True
+        ).start()
+
+    def _stop_p3_reset(self) -> None:
+        proc = self._p3_reset_proc
+        if proc is None or proc.poll() is not None:
+            messagebox.showinfo("안내", "실행 중인 작업이 없습니다.")
+            return
+        try:
+            self._p3_reset_stop_flag().write_text("stop\n", encoding="utf-8")
+        except OSError as e:
+            self.p3_reset_status.configure(text=f"중단 플래그 실패: {e}", fg="#b91c1c")
+            return
+        self.p3_reset_status.configure(text="작업중단 요청 중…", fg="#b45309")
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    def _watch_p3_reset_proc(self, proc: subprocess.Popen) -> None:
+        try:
+            assert proc.stdout is not None
+            buf = b""
+            while True:
+                chunk = proc.stdout.read(256)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    text = self._decode_log_bytes(line).rstrip()
+                    if text:
+                        self.after(0, lambda t=text: self._append_p3_reset_log(t))
+            if buf.strip():
+                text = self._decode_log_bytes(buf).rstrip()
+                if text:
+                    self.after(0, lambda t=text: self._append_p3_reset_log(t))
+        except Exception as e:  # noqa: BLE001
+            self.after(
+                0,
+                lambda: self.p3_reset_status.configure(text=f"로그 수신 오류: {e}", fg="#b91c1c"),
+            )
+        code = proc.wait()
+        if code == 0:
+            self.after(0, lambda: self.p3_reset_status.configure(text="완료", fg="#15803d"))
+        else:
+            self.after(
+                0,
+                lambda: self.p3_reset_status.configure(text=f"종료 (exit={code})", fg="#b91c1c"),
+            )
+
 
 def main() -> None:
     app = BoardApp()
