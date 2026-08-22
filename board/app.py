@@ -3814,8 +3814,17 @@ class BoardApp(tk.Tk):
         r1 = tk.Frame(form, bg="#ffffff")
         r1.pack(fill="x", pady=3)
         tk.Label(r1, text="작업 URL", width=13, anchor="w", bg="#ffffff").pack(side="left")
-        self.var_p3rst_url = tk.StringVar(value=p3_reset_mapping.DEFAULT_LIST_URL)
+        # 기본값을 넣지 않는다 — 목록 화면 URL 은 계정·검색조건마다 달라서
+        # 미리 채워두면 엉뚱한 화면(행 0건)에서 작업하게 된다.
+        self.var_p3rst_url = tk.StringVar(value="")
         tk.Entry(r1, textvariable=self.var_p3rst_url).pack(side="left", fill="x", expand=True)
+        tk.Label(
+            r1,
+            text="필수",
+            bg="#ffffff",
+            fg="#b91c1c",
+            font=("Malgun Gothic", 8, "bold"),
+        ).pack(side="left", padx=6)
 
         r2 = tk.Frame(form, bg="#ffffff")
         r2.pack(fill="x", pady=3)

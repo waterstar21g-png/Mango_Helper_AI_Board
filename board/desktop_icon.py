@@ -149,8 +149,12 @@ def _ps_quote(value: str) -> str:
 
 PIN_DIR_SUFFIX = r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
 
-# 한글/영문 Windows 의 「작업 표시줄에 고정」 verb
+# 한글/영문 Windows 의 「작업 표시줄에 고정」 verb (폴백 — 1순위는 아래 리소스 조회)
 PIN_VERB_PATTERN = "작업.?표시줄에 고정|Pin to tas"
+
+# 「작업 표시줄에 고정」 의 현지화 문자열은 shell32.dll 문자열 리소스 5386 에 있다.
+# 하드코딩 문자열로 찾으면 언어팩·빌드에 따라 못 찾으므로 이 값을 1순위로 쓴다.
+PIN_VERB_RESOURCE_ID = 5386
 
 
 def build_pin_powershell(lnk: Path) -> str:
@@ -172,21 +176,50 @@ def build_pin_powershell(lnk: Path) -> str:
             "  Copy-Item -LiteralPath $lnk -Destination $menu -Force",
             "  Write-Output \"MENU $menu\"",
             "} catch { Write-Output \"MENUFAIL $($_.Exception.Message)\" }",
-            # 셸 verb 로 실제 고정 시도
+            # shell32.dll 에서 현지화된 verb 이름을 읽어온다 (언어 무관)
+            "$verbName = ''",
+            "try {",
+            "  $sig = @'",
+            "[DllImport(\"kernel32.dll\", CharSet=CharSet.Unicode, SetLastError=true)]",
+            "public static extern IntPtr LoadLibrary(string lpFileName);",
+            "[DllImport(\"user32.dll\", CharSet=CharSet.Unicode, SetLastError=true)]",
+            "public static extern int LoadString(IntPtr h, uint id,"
+            " System.Text.StringBuilder buf, int max);",
+            "'@",
+            "  Add-Type -MemberDefinition $sig -Name PinRes -Namespace Win32"
+            " -PassThru | Out-Null",
+            "  $h = [Win32.PinRes]::LoadLibrary('shell32.dll')",
+            "  $sb = New-Object System.Text.StringBuilder 1024",
+            f"  [void][Win32.PinRes]::LoadString($h, {PIN_VERB_RESOURCE_ID},"
+            " $sb, $sb.Capacity)",
+            "  $verbName = ($sb.ToString() -replace '&','')",
+            "  if ($verbName) { Write-Output \"PINVERBNAME $verbName\" }",
+            "} catch { Write-Output \"PINVERBNAMEFAIL $($_.Exception.Message)\" }",
+            # 셸 verb 로 실제 고정 시도 — 리소스 이름 우선, 그 다음 패턴
             "try {",
             "  $shell = New-Object -ComObject Shell.Application",
             "  $folder = $shell.Namespace((Split-Path -Parent $lnk))",
             "  $item = $folder.ParseName((Split-Path -Leaf $lnk))",
             "  $done = $false",
             "  foreach ($verb in $item.Verbs()) {",
-            f"    if ($verb.Name -replace '&','' -match '{PIN_VERB_PATTERN}') {{",
+            "    $name = ($verb.Name -replace '&','')",
+            "    $hit = $false",
+            "    if ($verbName -and $name -eq $verbName) { $hit = $true }",
+            f"    elseif ($name -match '{PIN_VERB_PATTERN}') {{ $hit = $true }}",
+            "    if ($hit) {",
             "      $verb.DoIt()",
             "      $done = $true",
             "      break",
             "    }",
             "  }",
             "  if ($done) { Write-Output \"PIN $lnk\" }",
-            "  else { Write-Output \"PINVERB none\" }",
+            "  else {",
+            "    $names = (($item.Verbs() | ForEach-Object { $_.Name }) -join ' | ')",
+            "    Write-Output \"PINVERB none :: $names\"",
+            # 자동 고정이 막히면 아이콘을 선택한 상태로 탐색기를 띄워
+            # 우클릭 → [작업 표시줄에 고정] 을 바로 할 수 있게 한다
+            "    try { Start-Process explorer.exe -ArgumentList \"/select,$lnk\" } catch {}",
+            "  }",
             "} catch { Write-Output \"PINFAIL $($_.Exception.Message)\" }",
         ]
     )
@@ -197,12 +230,15 @@ def build_powershell(root: Path, targets: list[Path], *, pin: bool = True) -> st
     launcher = root / LAUNCHER
     lines = [
         "$ErrorActionPreference = 'Stop'",
-        f"$target = {_ps_quote(launcher)}",
+        f"$bat = {_ps_quote(launcher)}",
+        # ★ .bat 을 직접 가리키는 바로가기는 Windows 가 작업표시줄 고정을 막는다.
+        #   cmd.exe 를 타깃으로 두고 run.bat 을 인자로 넘기면 고정이 가능해진다.
+        "$target = Join-Path $env:SystemRoot 'System32\\cmd.exe'",
         f"$work = {_ps_quote(root)}",
         f"$icon = [Environment]::ExpandEnvironmentVariables({_ps_quote(ICON_PRIMARY)})",
         f"$iconFallback = [Environment]::ExpandEnvironmentVariables({_ps_quote(ICON_FALLBACK)})",
         "if (-not (Test-Path -LiteralPath ($icon -split ',')[0])) { $icon = $iconFallback }",
-        "if (-not (Test-Path -LiteralPath $target)) { throw \"run.bat not found: $target\" }",
+        "if (-not (Test-Path -LiteralPath $bat)) { throw \"run.bat not found: $bat\" }",
         "$shell = New-Object -ComObject WScript.Shell",
     ]
     for lnk in targets:
@@ -212,6 +248,7 @@ def build_powershell(root: Path, targets: list[Path], *, pin: bool = True) -> st
             "  if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }",
             "  $sc = $shell.CreateShortcut($p)",
             "  $sc.TargetPath = $target",
+            "  $sc.Arguments = '/c ' + [char]34 + $bat + [char]34",
             "  $sc.WorkingDirectory = $work",
             "  $sc.WindowStyle = 1",
             f"  $sc.Description = {_ps_quote(DESCRIPTION)}",
@@ -225,6 +262,21 @@ def build_powershell(root: Path, targets: list[Path], *, pin: bool = True) -> st
     if pin and targets:
         lines.append(build_pin_powershell(targets[0]))
     return "\n".join(lines)
+
+
+def build_pin_only_powershell(lnk: Path) -> str:
+    """이미 있는 아이콘만 작업표시줄에 고정 (아이콘 재생성 없음)."""
+    return "\n".join(
+        [
+            f"$check = {_ps_quote(lnk)}",
+            "if (-not (Test-Path -LiteralPath $check)) {",
+            "  Write-Output \"NOLNK $check\"",
+            "  exit 1",
+            "}",
+            f"Write-Output \"OK {lnk}\"",
+            build_pin_powershell(lnk),
+        ]
+    )
 
 
 def powershell_command(script: str) -> list[str]:
@@ -246,8 +298,11 @@ def create(
     *,
     all_targets: bool = False,
     pin: bool = True,
+    pin_only: bool = False,
 ) -> dict:
     """바탕화면에 실행파일 아이콘 생성 + 작업표시줄 고정.
+
+    `pin_only=True` 면 아이콘을 다시 만들지 않고 고정만 시도한다.
 
     반환: ok · created · failed · pinned · message
     """
@@ -279,7 +334,10 @@ def create(
             "pinned": [],
             "message": "바탕화면 폴더를 찾지 못했습니다.",
         }
-    script = build_powershell(root, targets, pin=pin)
+    if pin_only:
+        script = build_pin_only_powershell(targets[0])
+    else:
+        script = build_powershell(root, targets, pin=pin)
     try:
         proc = subprocess.run(
             powershell_command(script),
@@ -311,14 +369,24 @@ def create(
     pinned = [l[4:].strip() for l in text.splitlines() if l.startswith("PIN ")]
     ok = bool(created)
     if ok:
-        message = "바탕화면에 [망고보드] 아이콘을 만들었습니다.\n" + "\n".join(created)
+        if pin_only:
+            message = "아이콘: " + "\n".join(created)
+        else:
+            message = "바탕화면에 [망고보드] 아이콘을 만들었습니다.\n" + "\n".join(created)
         if pinned:
             message += "\n작업표시줄에 고정했습니다."
-        elif pin:
+        elif pin or pin_only:
             message += (
-                "\n작업표시줄 자동고정은 Windows 가 막았습니다 — 아이콘 우클릭 →"
-                " [작업 표시줄에 고정] (시작 메뉴에도 등록해 뒀습니다)."
+                "\n작업표시줄 자동고정이 Windows 에 막혔습니다 (Win10 1903+ · Win11).\n"
+                "아이콘을 선택한 탐색기 창을 띄웠습니다 — 우클릭 →"
+                " [작업 표시줄에 고정] 을 누르세요.\n"
+                "Win11 이면 [자세히 보기] 안에 있습니다. 시작 메뉴에도 등록해 뒀습니다."
             )
+    elif pin_only and "NOLNK" in text:
+        message = (
+            "바탕화면에 [망고보드] 아이콘이 없습니다 — 먼저 아이콘을 만드세요"
+            " (망고보드_바탕화면아이콘.bat)."
+        )
     else:
         message = "아이콘 생성 실패\n" + (text.strip() or "출력 없음")
     return {"ok": ok, "created": created, "failed": failed, "pinned": pinned, "message": message}
@@ -328,12 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
     all_targets = "--all" in args  # 바탕화면 후보 전부 + 폴더 사본까지
     pin = "--no-pin" not in args  # 기본: 작업표시줄 고정까지 시도
+    pin_only = "--pin-only" in args  # 아이콘 재생성 없이 고정만
     root = board_root()
     print("=" * 44)
-    print("  망고보드 바탕화면 아이콘 만들기")
+    print("  망고보드 작업표시줄 고정" if pin_only else "  망고보드 바탕화면 아이콘 만들기")
     print(f"  경로: {root}")
     print("=" * 44)
-    result = create(root, all_targets=all_targets, pin=pin)
+    result = create(root, all_targets=all_targets, pin=pin, pin_only=pin_only)
     print(result["message"])
     for f in result["failed"]:
         print(f"  [실패] {f}")

@@ -11,6 +11,8 @@ sys.path.insert(0, str(ROOT))
 import reset_category_mapping as rfs  # noqa: E402
 import map_categories as mc  # noqa: E402
 
+LIST_URL = "https://tmg1898.cafe24.com/mall/admin/admin_group.php?pmode=filter"
+
 
 # ── 선택자 · 상수 ────────────────────────────────────────────────
 
@@ -179,7 +181,7 @@ def test_run_delete_requires_rows(monkeypatch):
         sys.modules, "playwright.sync_api", type("M", (), {"sync_playwright": lambda: FakePW()})
     )
 
-    result = rfs.run_reset()
+    result = rfs.run_reset(list_url=LIST_URL)
     assert result.ok is False
     assert "작업 대상 행이 없습니다" in result.errors[0]
 
@@ -214,8 +216,17 @@ def test_run_delete_processes_row_range(monkeypatch):
         sys.modules, "playwright.sync_api", type("M", (), {"sync_playwright": lambda: FakePW()})
     )
 
-    result = rfs.run_reset(row_from=2, row_to=4)
+    result = rfs.run_reset(list_url=LIST_URL, row_from=2, row_to=4)
     assert seen == ["701", "702", "703"]
     assert result.rows == 3
     assert result.deleted == 3
     assert result.ok is True
+
+
+def test_run_reset_requires_list_url():
+    """★작업 URL 은 필수 — 기본값으로 엉뚱한 화면에서 초기화하면 되돌릴 수 없다."""
+    result = rfs.run_reset(list_url="")
+    assert result.ok is False
+    assert "작업 URL 을 입력하세요" in result.errors[0]
+    assert result.rows == 0
+    assert result.deleted == 0
