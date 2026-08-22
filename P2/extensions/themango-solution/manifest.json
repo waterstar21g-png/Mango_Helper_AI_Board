@@ -1,0 +1,143 @@
+{
+  "manifest_version": 3,
+  "name": "더망고 솔루션",
+  "description": "더망고는 '해외쇼핑몰 상품 수집' + '수집 데이터 가격 재고 관리' + '오픈마켓 및 자사몰로의 데이터 전송' 이 모두 합쳐진 대한민국 유일의 데이터 통합 관리 솔루션입니다.",
+  "version": "8.2.9",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "themango.ico",
+        "site2.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.mycafe24.com/*",
+        "*://*.cafe24.com/*",
+        "*://*.balaan.co.kr/products*",
+        "*://item.gmarket.co.kr/*",
+        "*://*.auction.co.kr/*",
+        "*://*.11st.co.kr/*",
+        "*://*.nbkorea.com/*",
+        "*://*.folderstyle.com/*",
+        "*://*.g9.co.kr/*",
+        "*://*.mustit.co.kr/*",
+        "*://*.wemakeprice.com/product/*",
+        "*://*.display.cjonstyle.com/*",
+        "*://*.lfmall.co.kr/*",
+        "*://*.atmos-seoul.com/*",
+        "*://*.jentestore.com/goods/view*",
+        "*://*.elcorteingles.es/*",
+        "*://*.wholesaledepot.co.kr/*",
+        "*://*.hoyaamall.co.kr/*",
+        "*://*.bananab2b.co.kr/*",
+        "*://*.hellosoccer.co.kr/*",
+        "*://*.ssg.com/*",
+        "*://*.wconcept.co.kr/*",
+        "*://*.tmall.com/*",
+        "*://*.minettiangeloonline.com/*",
+        "*://*.imarket.co.kr/*",
+        "*://*.musinsa.com/*",
+        "*://*.styledome.net/*",
+        "*://*.a-rt.com/*",
+        "*://*.shoemarker.co.kr/*",
+        "*://*.ople.com/*",
+        "*://*.elandmall.co.kr/*",
+        "*://*.sivillage.com/*",
+        "*://*.sneakermania.co.kr/*",
+        "*://*.halfclub.com/*",
+        "*://*.sellingkok.com/*",
+        "*://*.nppip.com/*",
+        "*://*.shop.ihanstyle.com/product.do*"
+      ],
+      "js": [
+        "jquery-1.11.0.min.js",
+        "inject.js",
+        "func.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://shop.app/products/*",
+        "*://*.timeshop24.com/*",
+        "*://*.injen.com/*",
+        "*://*.decathlon.co.kr/*",
+        "*://kream.co.kr/*",
+        "*://brand.naver.com/*",
+        "*://smartstore.naver.com/*",
+        "*://*.taobao.com/item.htm*",
+        "*://*.tmall.com/item.htm*",
+        "*://*.beseller.net/*",
+        "*://*.neweracapkorea.com/*"
+      ],
+      "js": [
+        "jquery-1.11.0.min.js",
+        "preload.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.aliexpress.com/item/*",
+        "*://*.aliexpress.com/store/*"
+      ],
+      "js": [
+        "jquery-1.11.0.min.js",
+        "preload.js",
+        "site2.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "exclude_matches": [
+        "*://*.ebay.com/*",
+        "*://*.unipass.customs.go.kr/*",
+        "*://*.cafe24.com/mall/admin/shop/extGoodsPop.php*",
+        "*://*.mycafe24.com/mall/admin/shop/extGoodsPop.php*"
+      ],
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "js": [
+        "jquery-1.11.0.min.js",
+        "pako.js",
+        "func.js",
+        "load.js",
+        "site.js",
+        "html2canvas.js"
+      ]
+    }
+  ],
+  "action": {
+    "default_icon": "themango128.png",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "themango16.png",
+    "48": "themango48.png",
+    "128": "themango128.png"
+  },
+  "permissions": [
+    "tabs",
+    "management",
+    "storage",
+    "unlimitedStorage",
+    "contentSettings"
+  ],
+  "host_permissions": [
+    "https://*.cafe24.com/*",
+    "https://*.mycafe24.com/*"
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAhqUFGdfI0/6oyRT1EXtS75t1UM6I6KSWxJTcLA5ZiCl8EzYINVG5/5aAjog8ymBzhp3w8H2lDHXCeed291ncOfZNfMr0/QrHL5y4ICbbSnYQqFlu/V7YpDqW+jO+EhqXlNtZgHaBNrZqVdpGax5cT5Csd4o1/lINsCPRi/I9QakbHq9MF0LDkdXgr22h7XEGMFWQJbtRdZcaAlRd6WxBTIvNWHECmllE0yK655GEAfnRqw0nHTipg9Qxwg9fvVXfZ502Lpx0z2jxKIul/VAkr6gUNFjuKUwROimfk3+JCYi0RxNs8zLqEB89XCeuj8IpUtLbo9HeGg4P6QgTYQlUTwIDAQAB"
+}
