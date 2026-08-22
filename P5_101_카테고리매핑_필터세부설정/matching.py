@@ -52,6 +52,8 @@ OUTER_SUBTYPES = (
     "스타디움재킷", "코치재킷", "트레이닝재킷", "아노락", "플리스", "뽀글이",
     "환절기코트", "베스트", "무스탕", "싱글코트", "더블코트", "숏패딩",
     "롱패딩", "헤비아우터",
+    # ★실사례 — "맨투맨/후드" 필터가 "패딩" 계열로 새던 사고 (형제 품목 오매핑)
+    "맨투맨", "후드", "다운점퍼", "점퍼", "패딩조끼",
 )
 # ★"바지" 하위 카테고리(다른 이름)
 PANTS_SUBTYPES = (
@@ -432,21 +434,42 @@ SAFE_FALLBACK_WORDS = GENERIC_CLASS_WORDS + (
 )
 
 
+def _contains_word(path: str, word: str) -> bool:
+    """path 문자열이 word 를 담고 있는가 (단방향 포함 — path_hit 과 달리
+    짧은 쪽이 긴 쪽에 우연히 포함되는 반대방향은 보지 않는다).
+
+    예) SPECIFIC_ITEM_WORDS 의 "여성속옷상의" 는 "상의" 를 담고 있지만,
+    path_hit 처럼 양방향으로 보면 path 의 아무 레벨("상의")이 이 긴 단어에
+    포함된다고 오판해 엉뚱하게 형제 품목 충돌로 잡힌다.
+    """
+    nw = normalize(word)
+    return bool(nw) and nw in normalize(path)
+
+
 def _specific_item_conflict(path: str, parsed: "ParsedFilter") -> bool:
     """path 가 **찾는 것과 다른** 형제 품목이면 True — 근접 후보에서 제외한다.
 
     안전한 일반화 단어(잡화·기타의류 등)가 함께 있으면 형제 품목이라도
     막지 않는다 — '기타 신발(운동화 아님)' 처럼 안내성 표기일 수 있어서다.
+    찾는 품목과 **관련된**(부분 겹침) 구체적 품목명은 형제로 보지 않는다
+    (예: 찾는 것 "속옷"·"상의" 와 후보의 "여성속옷상의" 는 서로 관련어).
     """
-    if any(path_hit(path, w) for w in SAFE_FALLBACK_WORDS):
+    if any(_contains_word(path, w) for w in SAFE_FALLBACK_WORDS):
         return False
     wanted = {normalize(n) for n in expand_synonyms([parsed.mid, *parsed.lows]) if n}
+    if not wanted:
+        return False
+    # ★리프(가장 구체적인 마지막 단계)만 본다 — 상위 단계는 그룹 이름일
+    # 뿐이라(예: "속옷/홈웨어 > 여성 속옷 상의" 의 "홈웨어"), 리프가 실제
+    # 품목을 정확히 담고 있다.
+    leaf = leaf_of(path)
     for words in SPECIFIC_ITEM_WORDS.values():
         for w in words:
-            if not path_hit(path, w):
+            if not _contains_word(leaf, w):
                 continue
-            if normalize(w) in wanted:
-                continue  # 찾는 것과 같은 품목 — 형제 아님
+            nw = normalize(w)
+            if any(nw in want or want in nw for want in wanted):
+                continue  # 찾는 것과 관련된 품목 — 형제 아님
             return True
     return False
 
@@ -726,6 +749,17 @@ def find_category(
         if not allowed:
             return "", f"성별({gender}) 조건에 맞는 카테고리 없음"
         all_paths = allowed
+
+    # ★절대규칙: 동떨어진 형제 품목은 어떤 단계에서도 고르지 않는다.
+    #   예) "맨투맨/후드" 를 찾는데 "패딩"(같은 의류 계열의 다른 구체적
+    #   품목)을 대신 고르면 안 된다. 1)~2-4) 모든 단계가 보는 후보 풀
+    #   자체에서 뺀다 — 나중 단계가 all_paths 로 되돌아가도 다시 새지
+    #   않도록, 이 시점의 all_paths 를 직접 좁힌다.
+    if parsed.mid or parsed.lows:
+        safe_paths = [p for p in all_paths if not _specific_item_conflict(p, parsed)]
+        if not safe_paths:
+            return "", "동떨어진 형제 품목만 있음 — 매핑하지 않음"
+        all_paths = safe_paths
 
     # ★규칙 2·3·4 — 성별·품목명·의류 우선순위로 후보를 먼저 좁힌다
     paths, notes = constrain(all_paths, parsed)

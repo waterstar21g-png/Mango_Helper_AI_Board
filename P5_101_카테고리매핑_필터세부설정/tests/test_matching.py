@@ -674,7 +674,7 @@ def test_shoe_filter_never_falls_back_to_sibling_shoe_type():
     """★신발 -> 구두 는 NOT-OK. 구두만 있으면 매핑하지 않는다."""
     cat, step = mt.find_category("남성-신발", ["구두 전용관"])
     assert cat == ""
-    assert step == "미검출"
+    assert "형제 품목" in step or step == "미검출"
 
 
 def test_shoe_filter_falls_back_to_generic_bucket():
@@ -717,3 +717,26 @@ def test_specific_item_conflict_allows_same_target_item():
     """찾는 것과 같은 품목이면 형제 충돌로 보지 않는다."""
     parsed = mt.parse_filter_name("남성-신발-구두")
     assert mt._specific_item_conflict("남성 구두", parsed) is False
+
+
+def test_sibling_exclusion_applies_to_all_stages_not_just_nearest():
+    """★실사례: '맨투맨/후드' 필터가 다른 마켓에서 '패딩'으로 새던 문제.
+
+    형제 품목 배제는 3) 최근접 단계뿐 아니라 앞선 단계(2-1 등)에도 똑같이
+    적용돼야 한다. 패딩만 있으면 매핑하지 않고, 맨투맨/후드가 있으면
+    그것을 고른다.
+    """
+    with_target = ["여성의류 > 아우터 > 패딩", "여성의류 > 상의 > 맨투맨/후드"]
+    cat, step = mt.find_category("여성-아우터-맨투맨/후드", with_target)
+    assert cat == "여성의류 > 상의 > 맨투맨/후드"
+
+    only_padding = ["여성의류 > 아우터 > 패딩"]
+    cat2, step2 = mt.find_category("여성-아우터-맨투맨/후드", only_padding)
+    assert cat2 == ""
+
+
+def test_underwear_related_compound_word_not_treated_as_sibling_conflict():
+    """★'여성속옷상의' 처럼 찾는 말(속옷·상의)을 담은 긴 합성어는 형제가 아니다."""
+    cats = ["속옷/홈웨어 > 여성 속옷 상의", "아우터 > 패딩", "신발 > 운동화"]
+    cat, step = mt.find_category("여성-속옷-상의", cats)
+    assert cat == "속옷/홈웨어 > 여성 속옷 상의"

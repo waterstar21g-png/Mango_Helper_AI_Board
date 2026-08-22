@@ -1072,3 +1072,28 @@ def test_open_setting_popup_reuses_tab_when_popup_event_missed():
     assert loc.click_calls == 1
     assert popup is page.context.pages[-1]
     assert len(page.context.pages) == 2
+
+
+# ── 엑셀에서 지운 말(브랜드)이 리프일치를 뚫고 새지 않게 ───────────
+
+
+def test_pick_option_rejects_excluded_word_even_on_leaf_match():
+    """★엑셀에 없는 '브랜드' 가 상위에 붙은 옵션은 리프만 같아도 고르지 않는다.
+
+    실사례: 엑셀엔 '브랜드' 가 전혀 없는데(사용자가 지움), 리프만 같은
+    망고 옵션 '브랜드 여성의류 > 점퍼 > 패딩/다운점퍼' 가 그대로 선택돼
+    화면에 반영됐다.
+    """
+    target = "여성의류 > 아우터 > 패딩/다운점퍼"
+    bad = "브랜드 여성의류 > 점퍼 > 패딩/다운점퍼"
+    good = "여성의류 > 점퍼 > 패딩/다운점퍼"
+    assert mc.pick_option([bad], target) == ""
+    assert mc.pick_option([good], target) == good
+    assert mc.pick_option([bad, good], target) == good
+
+
+def test_pick_option_allows_excluded_word_when_target_also_has_it():
+    """엑셀 확정값에 '브랜드' 가 이미 있으면(사용자가 남겨둔 경우) 막지 않는다."""
+    target = "브랜드 여성의류 > 점퍼 > 패딩"
+    opt = "브랜드 여성의류 > 점퍼 > 패딩"
+    assert mc.pick_option([opt], target) == opt

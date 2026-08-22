@@ -380,6 +380,20 @@ def gender_safe_options(options: Sequence[str], filter_name: str) -> list[str]:
     return same or safe
 
 
+# ★엑셀에서 의도적으로 지운 말들 — 리프만 같다고 이 말이 붙은 망고 옵션을
+# 대신 고르면 안 된다. 예) 엑셀엔 "브랜드" 가 전혀 없는데 망고 옵션
+# "브랜드 여성의류 > 점퍼 > 패딩/다운점퍼" 가 리프("패딩/다운점퍼")만 같다고
+# 선택되면, 화면엔 "엑셀에 없는 브랜드 카테고리"가 그대로 반영돼 버린다.
+EXCLUDED_UPPER_WORDS = ("브랜드",)
+
+
+def _has_excluded_word_not_in_target(opt: str, target: str) -> bool:
+    """opt 에 EXCLUDED_UPPER_WORDS 의 말이 있는데 target(엑셀 확정값)엔 없으면 True."""
+    opt_n = "".join(str(opt or "").split())
+    target_n = "".join(str(target or "").split())
+    return any(w in opt_n and w not in target_n for w in EXCLUDED_UPPER_WORDS)
+
+
 def pick_option(
     options: Sequence[str], category_path: str, filter_name: str = ""
 ) -> str:
@@ -391,6 +405,10 @@ def pick_option(
     리프일치는 다단 경로의 마지막 단계가 정확히 같을 때만 허용한다
     (예: 엑셀="패션의류잡화 > 여성신발 > 로퍼" · 망고="패션 > 여성신발 > 로퍼" —
     표기만 다를 뿐 마지막 단계 "로퍼" 가 정확히 같다).
+
+    ★상위 계층에 사용자가 엑셀에서 일부러 지운 말(EXCLUDED_UPPER_WORDS,
+    예: "브랜드")이 있으면, 리프가 같아도 고르지 않는다 — 리프일치는 표기
+    차이를 허용하려는 것이지, 엑셀에 없는 상위 분류를 끌고 오려는 게 아니다.
 
     `filter_name` 을 주면 반대 성별 항목을 먼저 걷어낸 뒤 고른다.
     """
@@ -407,6 +425,8 @@ def pick_option(
     leaf = leaf_of(target)
     for opt in pool:
         if leaf and norm(leaf_of(opt)) == norm(leaf):
+            if _has_excluded_word_not_in_target(opt, target):
+                continue
             return opt
     return ""
 
