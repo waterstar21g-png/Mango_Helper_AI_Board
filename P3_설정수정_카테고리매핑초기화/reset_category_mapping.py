@@ -201,22 +201,6 @@ def wait_for_rows(
         time.sleep(ROWS_POLL_S)
 
 
-def strip_query(url: str) -> str:
-    """쿼리를 뗀 목록 화면 주소.
-
-    붙여넣은 URL 의 쿼리에는 지난 검색조건이 그대로 남아 있다
-    (`pmode=filter_delete&uids=` · 당일 날짜 · `site_id=…`). 그대로 열면 결과가
-    0건이 되므로, 요건 0번대로 **화면에서 조건을 걸고 검색**할 수 있게 쿼리를 뗀
-    주소도 준비해 둔다.
-    """
-    from urllib.parse import urlsplit, urlunsplit
-
-    parts = urlsplit(str(url or "").strip())
-    if not parts.netloc:
-        return ""
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
-
-
 def search_and_collect(
     pw,
     url: str,
@@ -224,30 +208,23 @@ def search_and_collect(
     *,
     progress: ProgressFn | None = None,
 ) -> tuple[object, list[RowInfo], str]:
-    """목록 접속 → 사이트 선택 → [선택조건으로 검색하기] → 행 수집.
+    """요건 0번: 입력한 「작업 URL」로 화면을 띄우고 → 사이트 선택 → 검색 → 행 수집.
 
-    1차는 입력한 URL 그대로, 0행이면 쿼리를 뗀 주소로 2차 시도한다.
+    사이트 선택/검색이 실패해도 행 수집은 그대로 진행한다 — 붙여넣은 URL 이
+    이미 검색조건(site_id 등)을 담고 있어 화면에 결과가 떠 있는 경우가 있고,
+    그때 여기서 멈추면 실제로 있는 행을 0건으로 오판하게 된다.
     반환: (page, rows, 사용한 url)
     """
-    attempts: list[str] = [url]
-    bare = strip_query(url)
-    if bare and bare != url:
-        attempts.append(bare)
-
-    page = None
-    for n, candidate in enumerate(attempts, start=1):
-        if n > 1:
-            _log(progress, f"0행 → 쿼리 없는 목록 주소로 재시도: {candidate}", major=True)
-        page, used = p3opt._open_mango(pw, candidate, progress)
-        if not p3opt.apply_site_filter(page, site_id, progress=progress):
-            continue
-        page = p3opt.pick_list_page(page, progress=progress)
-        timeout = ROWS_WAIT_S if n == len(attempts) else min(20.0, ROWS_WAIT_S)
-        rows = wait_for_rows(page, timeout_s=timeout, progress=progress)
-        if rows:
-            _log(progress, f"검색 결과 {len(rows)}행 (url={used})", major=True)
-            return page, rows, used
-    return page, [], attempts[-1]
+    page, used = p3opt._open_mango(pw, url, progress)
+    if not p3opt.apply_site_filter(page, site_id, progress=progress):
+        _log(
+            progress,
+            "  사이트 선택/검색을 건너뜁니다 — 작업 URL 화면의 결과로 계속합니다",
+            major=True,
+        )
+    page = p3opt.pick_list_page(page, progress=progress)
+    rows = wait_for_rows(page, progress=progress)
+    return page, rows, used
 
 
 def row_range(row_from: int | str, row_to: int | str) -> tuple[int, int]:

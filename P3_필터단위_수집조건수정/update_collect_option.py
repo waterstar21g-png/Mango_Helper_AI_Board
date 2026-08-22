@@ -187,7 +187,8 @@ def normalize(text: str) -> str:
 def match_option(options: list[str], wanted: str) -> str | None:
     """리스트박스에서 고른 값을 실제 컨트롤 옵션에 맞춘다.
 
-    정확 일치 → 공백 무시 일치 → 부분 포함 순서.
+    정확 일치 → 공백 무시 일치 → **대소문자 무시** 일치 → 부분 포함 순서.
+    `MUSINSA.COM` 처럼 대소문자가 다르게 입력돼도 `MUSINSA.com` 옵션을 찾는다.
     """
     want = str(wanted or "").strip()
     if not want:
@@ -199,8 +200,13 @@ def match_option(options: list[str], wanted: str) -> str | None:
     for o in options:
         if normalize(o) == nw:
             return o
+    nwl = nw.lower()
     for o in options:
-        if nw and (nw in normalize(o) or normalize(o) in nw):
+        if normalize(o).lower() == nwl:
+            return o
+    for o in options:
+        no = normalize(o).lower()
+        if nwl and (nwl in no or no in nwl):
             return o
     return None
 

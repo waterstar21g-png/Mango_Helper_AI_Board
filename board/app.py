@@ -20,6 +20,14 @@ from types import ModuleType
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "board"))
 
+import input_history as ih  # noqa: E402 — 사이트명·목록 URL 이력 (리스트박스용)
+
+# 이력 저장 파일 — 프로그램별 폴더에 둔다 (.option_stop 등과 같은 방식)
+P5M_SITE_HISTORY = ROOT / "P5_101_카테고리매핑_필터세부설정" / ".recent_site.json"
+P5M_URL_HISTORY = ROOT / "P5_101_카테고리매핑_필터세부설정" / ".recent_url.json"
+P3RST_SITE_HISTORY = ROOT / "P3_설정수정_카테고리매핑초기화" / ".recent_site.json"
+P3RST_URL_HISTORY = ROOT / "P3_설정수정_카테고리매핑초기화" / ".recent_url.json"
+
 
 def _load_py_module(mod_name: str, folder: str, filename: str) -> ModuleType:
     path = ROOT / folder / filename
@@ -1470,7 +1478,16 @@ class BoardApp(tk.Tk):
         r0.pack(fill="x", pady=3)
         tk.Label(r0, text="상품수집사이트", width=13, anchor="w", bg="#ffffff").pack(side="left")
         self.var_p5m_site = tk.StringVar(value=p5_mapping.DEFAULT_SITE)
-        tk.Entry(r0, textvariable=self.var_p5m_site, width=20).pack(side="left")
+        self.cbo_p5m_site = ttk.Combobox(
+            r0,
+            textvariable=self.var_p5m_site,
+            width=20,
+            values=ih.load(P5M_SITE_HISTORY),
+        )
+        self.cbo_p5m_site.pack(side="left")
+        self.cbo_p5m_site.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_p5m_input_picked()
+        )
         tk.Label(
             r0,
             text=f"※ 현재는 {p5_mapping.ALLOWED_SITES[0]} 만 수행 (검증 후 확대)",
@@ -1530,8 +1547,24 @@ class BoardApp(tk.Tk):
         r2 = tk.Frame(form, bg="#ffffff")
         r2.pack(fill="x", pady=3)
         tk.Label(r2, text="목록 URL", width=13, anchor="w", bg="#ffffff").pack(side="left")
-        self.var_p5m_url = tk.StringVar(value=p5_mapping.DEFAULT_LIST_URL)
-        tk.Entry(r2, textvariable=self.var_p5m_url).pack(side="left", fill="x", expand=True)
+        # 기본값을 넣지 않는다 — 목록 URL 은 계정·검색조건마다 달라서
+        # 미리 채워두면 엉뚱한 화면(행 0건)에서 작업하게 된다.
+        # 대신 이전에 입력한 값을 리스트박스(콤보박스)에서 다시 고를 수 있다.
+        self.var_p5m_url = tk.StringVar(value="")
+        self.cbo_p5m_url = ttk.Combobox(
+            r2, textvariable=self.var_p5m_url, values=ih.load(P5M_URL_HISTORY)
+        )
+        self.cbo_p5m_url.pack(side="left", fill="x", expand=True)
+        self.cbo_p5m_url.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_p5m_input_picked()
+        )
+        tk.Label(
+            r2,
+            text="필수",
+            bg="#ffffff",
+            fg="#b91c1c",
+            font=("Malgun Gothic", 8, "bold"),
+        ).pack(side="left", padx=6)
 
         r3 = tk.Frame(form, bg="#ffffff")
         r3.pack(fill="x", pady=3)
@@ -1620,6 +1653,19 @@ class BoardApp(tk.Tk):
             text += f"   (없음: {' · '.join(missing)})"
         self.lbl_p5m_excels.configure(text=text, fg="#15803d" if not missing else "#b45309")
 
+    def _on_p5m_input_picked(self) -> None:
+        """사이트명·목록 URL 리스트박스에서 값을 고르면 즉시 망고 목록을 조회한다."""
+        if self.var_p5m_url.get().strip():
+            self._check_p5m_rows()
+
+    def _remember_p5m_inputs(self) -> None:
+        site = self.var_p5m_site.get().strip()
+        url = self.var_p5m_url.get().strip()
+        if site:
+            self.cbo_p5m_site.configure(values=ih.remember(P5M_SITE_HISTORY, site))
+        if url:
+            self.cbo_p5m_url.configure(values=ih.remember(P5M_URL_HISTORY, url))
+
     def _check_p5m_rows(self) -> None:
         """매핑 없이 행 번호·ftid·필터명만 확인 ('몇 번째 행인지' 검증)."""
         if self._p5_101_proc and self._p5_101_proc.poll() is None:
@@ -1630,6 +1676,7 @@ class BoardApp(tk.Tk):
             messagebox.showerror("오류", f"실행 파일 없음:\n{script}")
             return
 
+        self._remember_p5m_inputs()
         site = self.var_p5m_site.get().strip() or p5_mapping.DEFAULT_SITE
         row_from = self.var_p5m_from.get().strip() or str(p5_mapping.DEFAULT_ROW_FROM)
         row_to = self.var_p5m_to.get().strip() or str(p5_mapping.DEFAULT_ROW_TO)
@@ -1705,6 +1752,7 @@ class BoardApp(tk.Tk):
         except Exception:
             pass
 
+        self._remember_p5m_inputs()
         site = self.var_p5m_site.get().strip() or p5_mapping.DEFAULT_SITE
         if not p5_mapping.is_allowed_site(site):
             messagebox.showwarning(
@@ -3802,7 +3850,16 @@ class BoardApp(tk.Tk):
         r0.pack(fill="x", pady=3)
         tk.Label(r0, text="사이트명", width=13, anchor="w", bg="#ffffff").pack(side="left")
         self.var_p3rst_site = tk.StringVar(value="")
-        tk.Entry(r0, textvariable=self.var_p3rst_site, width=28).pack(side="left")
+        self.cbo_p3rst_site = ttk.Combobox(
+            r0,
+            textvariable=self.var_p3rst_site,
+            width=28,
+            values=ih.load(P3RST_SITE_HISTORY),
+        )
+        self.cbo_p3rst_site.pack(side="left")
+        self.cbo_p3rst_site.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_p3rst_input_picked()
+        )
         tk.Label(
             r0,
             text="(비우면 현재 선택 유지)",
@@ -3816,8 +3873,15 @@ class BoardApp(tk.Tk):
         tk.Label(r1, text="작업 URL", width=13, anchor="w", bg="#ffffff").pack(side="left")
         # 기본값을 넣지 않는다 — 목록 화면 URL 은 계정·검색조건마다 달라서
         # 미리 채워두면 엉뚱한 화면(행 0건)에서 작업하게 된다.
+        # 대신 이전에 입력한 값을 리스트박스(콤보박스)에서 다시 고를 수 있다.
         self.var_p3rst_url = tk.StringVar(value="")
-        tk.Entry(r1, textvariable=self.var_p3rst_url).pack(side="left", fill="x", expand=True)
+        self.cbo_p3rst_url = ttk.Combobox(
+            r1, textvariable=self.var_p3rst_url, values=ih.load(P3RST_URL_HISTORY)
+        )
+        self.cbo_p3rst_url.pack(side="left", fill="x", expand=True)
+        self.cbo_p3rst_url.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_p3rst_input_picked()
+        )
         tk.Label(
             r1,
             text="필수",
@@ -3943,6 +4007,19 @@ class BoardApp(tk.Tk):
         args.extend(["--row-from", row_from, "--row-to", row_to])
         return args
 
+    def _on_p3rst_input_picked(self) -> None:
+        """사이트명·작업 URL 리스트박스에서 값을 고르면 즉시 망고 목록을 조회한다."""
+        if self.var_p3rst_url.get().strip():
+            self._check_p3rst_rows()
+
+    def _remember_p3rst_inputs(self) -> None:
+        site = self.var_p3rst_site.get().strip()
+        url = self.var_p3rst_url.get().strip()
+        if site:
+            self.cbo_p3rst_site.configure(values=ih.remember(P3RST_SITE_HISTORY, site))
+        if url:
+            self.cbo_p3rst_url.configure(values=ih.remember(P3RST_URL_HISTORY, url))
+
     def _check_p3rst_rows(self) -> None:
         if self._p3_reset_proc and self._p3_reset_proc.poll() is None:
             messagebox.showwarning("실행 중", "이미 작업이 진행 중입니다.")
@@ -3951,6 +4028,7 @@ class BoardApp(tk.Tk):
             messagebox.showerror("오류", f"실행 파일 없음:\n{self._p3_reset_script()}")
             return
 
+        self._remember_p3rst_inputs()
         self.p3_reset_log.delete("1.0", "end")
         self.p3_reset_status.configure(text="행 목록 확인 중…", fg="#0f766e")
         try:
@@ -3986,6 +4064,7 @@ class BoardApp(tk.Tk):
         except Exception:
             pass
 
+        self._remember_p3rst_inputs()
         self.p3_reset_log.delete("1.0", "end")
         self.p3_reset_status.configure(
             text=f"초기화 시작 — {row_from}~{row_to}행", fg="#b91c1c"

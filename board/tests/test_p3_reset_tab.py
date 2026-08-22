@@ -55,3 +55,23 @@ def test_board_app_wires_the_tab():
 def test_stop_flag_is_gitignored():
     text = (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert f"{FOLDER}/.reset_stop" in text
+
+
+def test_input_history_wired_for_site_and_url():
+    """사이트명·작업 URL 을 리스트박스(콤보박스)로 고를 수 있고, 선택 시 즉시 조회한다."""
+    text = (ROOT / "board" / "app.py").read_text(encoding="utf-8")
+    for needed in (
+        "self.cbo_p3rst_site",
+        "self.cbo_p3rst_url",
+        "self._on_p3rst_input_picked",
+        "self._remember_p3rst_inputs",
+        "P3RST_SITE_HISTORY",
+        "P3RST_URL_HISTORY",
+    ):
+        assert needed in text, f"board/app.py 에 {needed} 가 없습니다."
+
+
+def test_recent_history_files_are_gitignored():
+    text = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert f"{FOLDER}/.recent_site.json" in text
+    assert f"{FOLDER}/.recent_url.json" in text

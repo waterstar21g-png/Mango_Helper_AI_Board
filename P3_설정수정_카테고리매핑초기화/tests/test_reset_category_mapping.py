@@ -53,15 +53,6 @@ def test_delete_selectors_match_screenshot_dom():
 # ── 작업 URL ─────────────────────────────────────────────────────
 
 
-def test_strip_query_keeps_only_list_page():
-    """붙여넣은 URL 의 지난 검색조건이 결과를 0건으로 만든다 — 쿼리를 뗀다."""
-    assert rcm.strip_query(LIST_URL) == (
-        "https://tmg1898.cafe24.com/mall/admin/admin_group.php"
-    )
-    assert rcm.strip_query("") == ""
-    assert rcm.strip_query("not-a-url") == ""
-
-
 def test_build_popup_url_from_list_url():
     url = rcm.build_popup_url(LIST_URL, "670")
     assert url.startswith("https://tmg1898.cafe24.com/mall/admin/admin_category_set.php")
