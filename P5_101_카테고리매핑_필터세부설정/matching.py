@@ -1085,6 +1085,7 @@ def find_category(
     force: bool = True,
     db=None,
     keyword_db=None,
+    ext_db=None,
 ) -> tuple[str, str]:
     """최적("최종") 카테고리와 그 근거 단계 — 요건재정의(2026-08-22) D 항 그대로.
 
@@ -1109,8 +1110,9 @@ def find_category(
     5) 단계에서 연관검색어를 찾는 데 쓴다(없으면 5) 단계는 건너뛴다).
     `keyword_db` 는 `keyword_dictionary.KeywordDB`("최신성 우선" 원칙에
     따라 연관검색어DB의 공식 기준) — 같은 5) 단계에서 `resolve()` 로
-    검색어를 카테고리명으로 확정해 확장 후보에 더한다. 둘 다 없어도
-    (기본값) 이전처럼 동작한다(하위호환).
+    검색어를 카테고리명으로 확정해 확장 후보에 더한다.
+    `ext_db` 는 `extended_master_db.ExtendedMasterDB`(표준 확장형DB) —
+    5) 단계에서 `expand_terms()` 로 범주·범위를 확장한다.
     """
     parsed = parse_filter_name(name)
     skip = {normalize(e) for e in (exclude or []) if str(e or "").strip()}
@@ -1237,6 +1239,14 @@ def find_category(
             if not term or key in tried_db_terms:
                 continue
             tried_db_terms.add(key)
+
+            # 2차: 확장형DB (ext_db) 에서 범주·범위 확장
+            if ext_db is not None:
+                for ext_term in ext_db.expand_terms(term, limit=5):
+                    if ext_term and ext_term not in low_terms and ext_term not in new_low_terms:
+                        new_low_terms.append(ext_term)
+
+            # 3차: 매핑DB (db/keyword_db) 에서 범주·범위 확장
             if db is not None:
                 for related, priority in db.related(term):
                     if priority != 1:
