@@ -19,7 +19,6 @@ def test_forbidden_words_strictly_excluded_unless_in_filter():
         "원예 > 꽃 > 장미",
         "마트 > 생필품 > 화장지",
         "외식 > 배달음식 > 피자",
-        "마트 > 생활용품 > 세제",
         "가구/인테리어 > DIY > 공구",
         "디지털 > PC > 노트북",
         "디지털 > 주변기기 > 마우스",
@@ -44,6 +43,16 @@ def test_forbidden_words_strictly_excluded_unless_in_filter():
     cat, step = mt.find_category("아름트리-무신사-남성-상의-티셔츠", all_cats)
     assert cat == normal_cat
     assert cat not in forbidden_cats
+
+
+def test_household_goods_not_forbidden():
+    """'생활용품'은 배제 단어에서 제외되었으므로 필터링되지 않고 선택 가능해야 함."""
+    cats = [
+        "마트 > 생활용품 > 세탁세제",
+        "디지털 > PC > 노트북",
+    ]
+    cat, step = mt.find_category("아름트리-무신사-남성-소품-세제", cats)
+    assert cat == "마트 > 생활용품 > 세탁세제"
 
 
 def test_forbidden_word_allowed_if_in_filter_name():
