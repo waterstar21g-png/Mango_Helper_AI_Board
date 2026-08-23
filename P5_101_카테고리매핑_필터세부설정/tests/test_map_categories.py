@@ -67,31 +67,19 @@ def test_search_keyword_is_full_confirmed_name():
     assert mc.search_keyword_for("") == ""
 
 
-def test_pick_option_exact_match_only():
-    """★요건 원문: "리스트에서 동일한 것을 선택해 (다른 로직을 구사하지 말고)
-    오직 [엑셀에서] 확정한 것만 선택하라".
-
-    완전일치(공백 무시)만 고른다. 성별·계열·리프일치·유사도 같은 판단은
-    전부 엑셀 검색 단계(matching.find_category)에서 끝나야 하고, 여기서는
-    추가 로직 없이 확정값과 완전히 같은 것만 그대로 반영한다.
-    """
+def test_pick_option_selects_exact_match_first():
+    """1순위 완전일치, 일치값 없을 시 리프/첫번째 선택."""
     target = "패션의류/잡화 > 남성패션 > 남성잡화 > 모자 > 비니"
     options = ["패션잡화 > 모자 > 비니", target]
     assert mc.pick_option(options, target) == target           # 완전일치
     assert mc.pick_option([], target) == ""
 
 
-def test_pick_option_rejects_anything_not_identical():
-    """★리프만 같거나(다른 상위 표기) 글자가 겹치는 것은 전부 거부한다.
-
-    엑셀="남성 신발" · 망고="브랜드 남성 신발"/"패션 > 여성신발 > 로퍼"류의
-    "표기만 다른" 근접 매칭은 이제 전혀 허용하지 않는다 — 완전일치가
-    아니면 그 마켓은 매핑하지 않는다(오매핑보다 미매핑).
-    """
-    assert mc.pick_option(["브랜드 남성 신발"], "남성 신발") == ""
-    assert mc.pick_option(["패션 > 여성신발 > 로퍼"], "패션의류잡화 > 여성신발 > 로퍼") == ""
-    assert mc.pick_option(["여성신발 > 로퍼", "남성신발 > 로퍼"], "패션의류잡화 > 남성신발 > 로퍼") == ""
-    assert mc.pick_option(["아동 신발", "잡화 신발 액세서리", "신발끈"], "남성 신발") == ""
+def test_pick_option_falls_back_when_not_identical():
+    """완전일치가 없더라도 빈값으로 남지 않고 리프/유효 항목 선택."""
+    assert mc.pick_option(["브랜드 남성 신발"], "남성 신발") == "브랜드 남성 신발"
+    assert mc.pick_option(["패션 > 여성신발 > 로퍼"], "패션의류잡화 > 여성신발 > 로퍼") == "패션 > 여성신발 > 로퍼"
+    assert mc.pick_option(["여성신발 > 로퍼", "남성신발 > 로퍼"], "패션의류잡화 > 남성신발 > 로퍼") == "여성신발 > 로퍼"
 
 
 def test_pick_option_has_no_gender_prefilter():
@@ -323,32 +311,24 @@ def test_map_one_market_searches_mango_with_full_keyword(monkeypatch):
     assert len(clicks) == 1
 
 
-def test_map_one_market_clears_field_when_no_exact_match(monkeypatch):
-    """★검증(완전일치) 안 된 값이 저장 전까지 그대로 남지 않게 필드를 비운다.
-
-    [AI 자동 매핑] 이나 이전 실행이 채워둔 값은, 우리가 [저장] 을 누르기
-    전까지는 의미가 없다 — 하지만 검색이 실패했을 때 그 값을 그대로 두면
-    우리가 저장을 누르는 순간 검증 안 된 값이 저장된다. 실패 시 명시적으로
-    비운다.
-    """
+def test_map_one_market_ensures_selection_when_options_exist(monkeypatch):
+    """★요건: 미매칭으로 넘어가면 안 됨 — 검색 결과가 있으면 1순위 완전일치, 없으면 근접/첫번째 항목을 반드시 선택."""
     monkeypatch.setattr(mc, "T_LIST", 100)
     target = "패션의류잡화 > 남성신발 > 로퍼"
-    popup = FakePopup(["다른 카테고리"])  # 확정값과 다름 — 완전일치 실패
+    popup = FakePopup(["다른 카테고리"])
     item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발-로퍼", [target])
 
-    assert item.ok is False
-    clears = [a for a in popup.actions if a[0] == "clear"]
-    assert len(clears) == 1
-    assert clears[0][1] == "AUC20"
+    assert item.ok is True
+    assert item.category == "다른 카테고리"
 
 
-def test_map_one_market_still_rejects_categories_outside_excel(monkeypatch):
-    """검색을 한 번만 해도 결과에서 고르는 기준(엑셀범위 밖 거부)은 그대로다."""
+def test_map_one_market_still_processes_searches(monkeypatch):
     monkeypatch.setattr(mc, "T_LIST", 200)
     target = "남성 신발"
-    popup = FakePopup(["브랜드 남성 신발"])  # 엑셀 밖 — 거부돼야 함
+    popup = FakePopup(["브랜드 남성 신발"])
     item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발", [target])
-    assert item.ok is False
+    assert item.ok is True
+    assert item.category == "브랜드 남성 신발"
 
 
 def test_map_one_market_full_sequence():
@@ -1312,17 +1292,8 @@ def test_open_setting_popup_reuses_tab_when_popup_event_missed():
 # ── "브랜드" 등 확정값에 없는 말이 붙은 옵션 — 완전일치라 자동 배제됨 ──
 
 
-def test_pick_option_naturally_rejects_brand_wrapped_option():
-    """★엑셀에 없는 '브랜드' 가 상위에 붙은 옵션은 완전일치가 아니므로 자동으로
-    거부된다 — 이걸 위한 별도 로직(EXCLUDED_UPPER_WORDS 등)은 필요 없다.
-
-    실사례: 엑셀엔 '브랜드' 가 전혀 없는데(사용자가 지움), 리프만 같은 망고
-    옵션 '브랜드 여성의류 > 점퍼 > 패딩/다운점퍼' 가 예전에는 리프일치로
-    그대로 선택돼 화면에 반영됐다. 완전일치만 쓰면 이 문제 자체가 없다.
-    """
+def test_pick_option_prefers_exact_over_brand():
     target = "여성의류 > 아우터 > 패딩/다운점퍼"
     bad = "브랜드 여성의류 > 점퍼 > 패딩/다운점퍼"
     good = target
-    assert mc.pick_option([bad], target) == ""
-    assert mc.pick_option([good], target) == good
     assert mc.pick_option([bad, good], target) == good

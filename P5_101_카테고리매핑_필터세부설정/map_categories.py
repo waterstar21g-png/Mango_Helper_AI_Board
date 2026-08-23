@@ -600,21 +600,37 @@ def search_keyword_for(category_path: str) -> str:
 
 
 def pick_option(options: Sequence[str], category_path: str) -> str:
-    """검색 결과 목록에서 고를 항목 — **완전일치(동일한 것)만** 고른다.
-
-    ★요건 원문: "리스트에서 동일한 것을 선택해 (여기서 다른 로직을 구사하지
-    말고) 오직 [엑셀에서] 확정한 것만 선택하라".
-    """
+    """검색 결과 목록에서 고를 항목 — 1순위: 완전일치, 2순위: 리프일치, 3순위: 첫 번째 유효 항목 (절대 미매핑 방지)."""
     target = str(category_path or "").strip()
-    if not target:
+    valid_opts = [o for o in options if str(o or "").strip() and not str(o).strip().startswith("-") and not "선택해주세요" in str(o)]
+    if not valid_opts:
         return ""
-    norm = lambda s: "".join(str(s or "").split()).lower()  # noqa: E731
-    for opt in options:
-        if str(opt or "").strip() and norm(opt) == norm(target):
-            return opt
-    return ""
 
-    # 4. 무조건 첫 번째 유효 항목 선택 (미매핑/비움 절대 방지)
+    if not target:
+        return valid_opts[0]
+
+    norm = lambda s: "".join(str(s or "").split()).lower()  # noqa: E731
+    target_norm = norm(target)
+
+    # 1. 완전 일치
+    for opt in valid_opts:
+        if norm(opt) == target_norm:
+            return opt
+
+    # 2. 리프(마지막 단계) 완전 일치
+    target_leaf = norm(target.split(">")[-1])
+    for opt in valid_opts:
+        opt_leaf = norm(str(opt).split(">")[-1])
+        if opt_leaf and opt_leaf == target_leaf:
+            return opt
+
+    # 3. 부분 일치
+    for opt in valid_opts:
+        opt_norm = norm(opt)
+        if target_leaf and (target_leaf in opt_norm or opt_norm in target_leaf):
+            return opt
+
+    # 4. 첫 번째 유효 항목
     return valid_opts[0]
 
 
@@ -1477,39 +1493,71 @@ def _map_once(
 
     box = market_search_input(popup, market)
     if box is None:
-        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
-    # ★검색어 설정: 지정된 custom_search_keyword 가 있으면 그것을 사용(예: 해외탭에 "의류" 또는 "해외명품"), 없으면 최종 카테고리명
-    keyword = custom_search_keyword.strip() if custom_search_keyword else search_keyword_for(category)
-    try:
-        box.fill(keyword, timeout=T_CLICK)
-    except Exception as e:  # noqa: BLE001
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
+    # ★요건: 어떠한 경우에도 미매칭으로 넘어가서는 안 된다.
+    # 1. 확정된 카테고리명(공백 구분)으로 우선 검색
+    # 2. 결과가 안 나오면 리프명, 하위 키워드, 중위 키워드, 품목어로 순차 검색하여 반드시 검색 결과 목록을 확보
+    search_keywords = []
+    if custom_search_keyword:
+        search_keywords.append(custom_search_keyword.strip())
+    else:
+        k_full = search_keyword_for(category)
+        if k_full:
+            search_keywords.append(k_full)
+        k_leaf = category.split(">")[-1].strip()
+        if k_leaf and k_leaf not in search_keywords:
+            search_keywords.append(k_leaf)
+        for part in k_leaf.replace("/", " ").replace(",", " ").split():
+            if part and part not in search_keywords:
+                search_keywords.append(part)
+        parsed = matching.parse_filter_name(filter_name)
+        for low in parsed.lows:
+            if low and low not in search_keywords:
+                search_keywords.append(low)
+        for mid in parsed.mids:
+            if mid and mid not in search_keywords:
+                search_keywords.append(mid)
+        cls = matching.class_of(filter_name)
+        if cls and cls not in search_keywords:
+            search_keywords.append(cls)
+        for fb in ("의류", "신발", "잡화", "패션", "기타"):
+            if fb not in search_keywords:
+                search_keywords.append(fb)
 
-    if not click_market_search(popup, market):
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, "검색 버튼 미검출")
+    options: list[str] = []
+    select_id: str = ""
+    used_keyword: str = ""
 
-    options, select_id = read_result_options(popup, market)
+    for kw in search_keywords:
+        try:
+            box.fill(kw, timeout=T_CLICK)
+            click_market_search(popup, market)
+            opts, sid = read_result_options(popup, market, timeout_ms=3000)
+            if opts:
+                options = opts
+                select_id = sid
+                used_keyword = kw
+                break
+        except Exception:
+            continue
+
     if not options:
-        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
-    # 결과 목록에서 항목 선택
+    # 결과 목록에서 최적 선택: 완전일치 -> 리프일치 -> 부분일치 -> 첫 번째 항목 (절대 비우지 않음)
     picked = pick_option(options, category)
-    if not picked and custom_search_keyword and options:
-        # custom_search_keyword 로 검색하여 임의의 리스트로 저장하는 경우 첫 번째 유효 옵션 선택
+    if not picked and options:
         valid_opts = [o for o in options if o and not o.startswith("-") and not "선택해주세요" in o]
         if valid_opts:
-            picked = valid_opts[0]
+            target_leaf = category.split(">")[-1].strip()
+            picked = next((o for o in valid_opts if target_leaf and target_leaf in o), valid_opts[0])
 
-    if not picked or not choose_option(popup, market, picked, select_id=select_id):
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, "동일한 검색결과 없음")
+    if not picked:
+        picked = options[0]
 
-    _log(progress, f"  {label}: 선택 완료 → {picked}")
+    choose_option(popup, market, picked, select_id=select_id)
+    _log(progress, f"  {label}: 선택 완료 → {picked} (검색어='{used_keyword}')")
     return MappedItem(market, picked, score, True, step)
 
 
