@@ -150,3 +150,104 @@ def test_coupang_level5_first_leaf_chosen_when_hard_to_select():
     )
     assert cat == "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > A타입"
 
+
+def test_three_stage_verify_and_save_sequence():
+    """요건(2026-08-23):
+    1차: 최초 등록 -> 저장
+    2차: 확인 -> 누락 확인 -> 2차 등록 -> 저장
+    3차: 확인 -> 누락 확인 -> 3차 등록 -> 저장
+    """
+    class VerifyPopup:
+        def __init__(self):
+            self.saves = 0
+            self.round_calls = 0
+            self.state = {
+                "AUC20": {"code": "", "name": ""},
+                "11ST": {"code": "", "name": ""},
+                "GMK20": {"code": "", "name": ""},
+                "SMART": {"code": "", "name": ""},
+                "COUP": {"code": "", "name": ""},
+                "LTON": {"code": "", "name": ""},
+            }
+
+        def on(self, *a, **k):
+            pass
+
+        def evaluate(self, script, *args):
+            if "MAPPED_STATE_JS" in script or "openmarket_cm_category_" in script:
+                codes = args[0] if args else []
+                return {c: self.state.get(c, {"code": "", "name": ""}) for c in codes}
+            return {}
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def is_closed(self):
+            return False
+
+        def close(self):
+            pass
+
+    popup = VerifyPopup()
+    # 1차 실행에서는 쿠팡/롯데ON만 성공, 옥션/11번가/G마켓/스마트는 누락되었다고 가정
+    # 2차 실행에서 11번가/G마켓 성공, 옥션/스마트 누락
+    # 3차 실행에서 옥션/스마트 성공
+    attempt = {"n": 0}
+
+    def fake_map_one_market(p, market, *a, **k):
+        attempt["n"] += 1
+        # 1차
+        if attempt["n"] <= 6:
+            if market in ("COUP", "LTON"):
+                popup.state[market] = {"code": "1", "name": "카테고리"}
+                return mc.MappedItem(market, "카테고리", 1.0, True, "성공")
+            return mc.MappedItem(market, "", 0.0, False, "1차실패")
+        # 2차
+        elif attempt["n"] <= 10:
+            if market in ("11ST", "GMK20"):
+                popup.state[market] = {"code": "1", "name": "카테고리"}
+                return mc.MappedItem(market, "카테고리", 1.0, True, "2차성공")
+            return mc.MappedItem(market, "", 0.0, False, "2차실패")
+        # 3차
+        else:
+            popup.state[market] = {"code": "1", "name": "카테고리"}
+            return mc.MappedItem(market, "카테고리", 1.0, True, "3차성공")
+
+    save_count = {"n": 0}
+    def fake_save(p, *a, **k):
+        save_count["n"] += 1
+        return True
+
+    import sys
+    monkeypatch_dict = {
+        "open_setting_popup": lambda *a, **k: popup,
+        "map_one_market": fake_map_one_market,
+        "click_config_save": fake_save,
+        "close_popup": lambda *a, **k: None,
+    }
+
+    orig_open = mc.open_setting_popup
+    orig_map = mc.map_one_market
+    orig_save = mc.click_config_save
+    orig_close = mc.close_popup
+
+    try:
+        mc.open_setting_popup = monkeypatch_dict["open_setting_popup"]
+        mc.map_one_market = monkeypatch_dict["map_one_market"]
+        mc.click_config_save = monkeypatch_dict["click_config_save"]
+        mc.close_popup = monkeypatch_dict["close_popup"]
+
+        row = mc.RowInfo(0, "793", "아름트리-무신사-남성-상의-티셔츠")
+        detail = mc.map_one_row(None, row, {m: ["카테고리"] for m in mc.MARKETS}, list_url="url")
+
+        # 1차 저장, 2차 저장, 3차 저장 총 3번 이상 저장 호출 확인
+        assert save_count["n"] >= 3
+        # 모든 마켓이 3차까지 거쳐 결국 채워졌는지 확인
+        assert mc.unmapped_markets(popup, list(mc.MARKETS)) == []
+    finally:
+        mc.open_setting_popup = orig_open
+        mc.map_one_market = orig_map
+        mc.click_config_save = orig_save
+        mc.close_popup = orig_close
+
+

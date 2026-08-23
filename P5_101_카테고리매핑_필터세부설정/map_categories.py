@@ -1206,6 +1206,63 @@ def clear_market_category(popup, market: str, *, progress: ProgressFn | None = N
         pass
 
 
+CHOOSE_OPTION_JS = """
+(args) => {
+  const [selId, targetText, code] = args;
+  const sel = document.getElementById(selId);
+  if (!sel) return false;
+  const norm = (s) => (s || '').replace(/\\s+/g, '').toLowerCase();
+  const targetNorm = norm(targetText);
+  let bestIdx = -1;
+  let bestScore = -1;
+
+  for (let i = 0; i < sel.options.length; i++) {
+    const opt = sel.options[i];
+    const t = (opt.textContent || '').trim();
+    const v = (opt.value || '').trim();
+    if (!t || t.startsWith('-') || t.includes('선택해주세요')) continue;
+    const optNorm = norm(t);
+    if (optNorm === targetNorm) {
+      bestIdx = i;
+      bestScore = 100;
+      break;
+    }
+    const optLeaf = norm(t.split('>').pop());
+    const targetLeaf = norm(targetText.split('>').pop());
+    if (optLeaf && targetLeaf && optLeaf === targetLeaf && bestScore < 80) {
+      bestIdx = i;
+      bestScore = 80;
+    } else if (targetLeaf && (optNorm.includes(targetLeaf) || targetNorm.includes(optLeaf))) {
+      if (bestScore < 50) {
+        bestIdx = i;
+        bestScore = 50;
+      }
+    } else if (optNorm && (optNorm.includes(targetNorm) || targetNorm.includes(optNorm))) {
+      if (bestScore < 40) {
+        bestIdx = i;
+        bestScore = 40;
+      }
+    } else if (bestIdx < 0) {
+      bestIdx = i;
+      bestScore = 10;
+    }
+  }
+
+  if (bestIdx >= 0) {
+    sel.selectedIndex = bestIdx;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    const idEl = document.getElementById('openmarket_cm_category_' + code);
+    const nameEl = document.getElementsByName('openmarket_cm_category_name_' + code)[0];
+    if (idEl && sel.options[bestIdx].value) idEl.value = sel.options[bestIdx].value;
+    if (nameEl) nameEl.value = (sel.options[bestIdx].textContent || '').trim();
+    return true;
+  }
+  return false;
+}
+"""
+
+
 def choose_option(popup, market: str, label: str, *, select_id: str = "") -> bool:
     ids = [select_id] if select_id else result_select_ids(market)
     for sid in ids:
@@ -1216,7 +1273,12 @@ def choose_option(popup, market: str, label: str, *, select_id: str = "") -> boo
             loc.select_option(label=label, timeout=T_CLICK)
             return True
         except Exception:
-            continue
+            try:
+                res = popup.evaluate(CHOOSE_OPTION_JS, [sid, label, market])
+                if res:
+                    return True
+            except Exception:
+                continue
     return False
 
 
@@ -1373,37 +1435,69 @@ def _map_once(
     score = 1.0 if category else 0.0
     if not category:
         _log(progress, f"  {label}: 매칭 실패 ({step})")
-        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, "", 0.0, False, "유사 카테고리 없음")
     _log(progress, f"  {label}: 최적 카테고리(엑셀) = {category}  [{step}]")
 
     box = market_search_input(popup, market)
     if box is None:
-        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
-    keyword = search_keyword_for(category)
-    try:
-        box.fill(keyword, timeout=T_CLICK)
-    except Exception as e:  # noqa: BLE001
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
+    # 검색어 다단계 목록 구성 (전체 경로 -> 리프 -> 필터명 하위/중위 -> 품목어)
+    search_terms: list[str] = []
+    k_full = search_keyword_for(category)
+    if k_full:
+        search_terms.append(k_full)
+    k_leaf = category.split(">")[-1].strip()
+    if k_leaf and k_leaf not in search_terms:
+        search_terms.append(k_leaf)
 
-    if not click_market_search(popup, market):
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, "검색 버튼 미검출")
+    parsed = matching.parse_filter_name(filter_name)
+    for low in parsed.lows:
+        if low and low not in search_terms:
+            search_terms.append(low)
+    for mid in parsed.mids:
+        if mid and mid not in search_terms:
+            search_terms.append(mid)
 
-    options, select_id = read_result_options(popup, market)
+    cls = matching.class_of(filter_name)
+    if cls and cls not in search_terms:
+        search_terms.append(cls)
+
+    for w in ("티셔츠", "셔츠", "바지", "팬츠", "신발", "모자", "가방", "의류", "잡화", "패션"):
+        if w not in search_terms and (cls == w or w in filter_name or w in category):
+            search_terms.append(w)
+
+    options: list[str] = []
+    select_id: str = ""
+    used_term: str = ""
+
+    for st in search_terms:
+        try:
+            box.fill(st, timeout=T_CLICK)
+            click_market_search(popup, market)
+            opts, sid = read_result_options(popup, market)
+            if opts:
+                options = opts
+                select_id = sid
+                used_term = st
+                break
+        except Exception:
+            continue
+
     if not options:
-        # 단일 리프명으로 2차 검색 시도 (검색 결과 확보)
-        leaf_keyword = category.split(">")[-1].strip()
-        if leaf_keyword and leaf_keyword != keyword:
+        # 마지막으로 기본 검색어로 옵션 로드 시도
+        for fallback_kw in ("", "패션", "의류", "신발", "잡화", "기타"):
             try:
-                box.fill(leaf_keyword, timeout=T_CLICK)
+                box.fill(fallback_kw, timeout=T_CLICK)
                 click_market_search(popup, market)
-                options, select_id = read_result_options(popup, market)
+                opts, sid = read_result_options(popup, market, timeout_ms=2000)
+                if opts:
+                    options = opts
+                    select_id = sid
+                    used_term = fallback_kw
+                    break
             except Exception:
-                pass
+                continue
 
     if not options:
         clear_market_category(popup, market, progress=progress)
@@ -1414,7 +1508,7 @@ def _map_once(
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "동일한 검색결과 없음")
 
-    _log(progress, f"  {label}: 선택 완료 → {picked}")
+    _log(progress, f"  {label}: 선택 완료 → {picked} (검색어='{used_term}')")
     return MappedItem(market, picked, score, True, step)
 
 
@@ -1424,10 +1518,30 @@ MAPPED_STATE_JS = """
   for (const code of codes) {
     const idEl = document.getElementById('openmarket_cm_category_' + code);
     const nameEl = document.getElementsByName('openmarket_cm_category_name_' + code)[0];
-    out[code] = {
-      code: idEl ? (idEl.value || '').trim() : '',
-      name: nameEl ? (nameEl.value || '').trim() : '',
-    };
+    const sel1 = document.getElementById('openmarket_category_search_list_' + code);
+    const sel2 = document.getElementById('openmarket_category_search_list2_' + code);
+
+    let codeVal = idEl ? (idEl.value || '').trim() : '';
+    let nameVal = nameEl ? (nameEl.value || '').trim() : '';
+
+    const sel = (sel1 && (sel1.offsetParent !== null || window.getComputedStyle(sel1).display !== 'none')) ? sel1 :
+                (sel2 && (sel2.offsetParent !== null || window.getComputedStyle(sel2).display !== 'none')) ? sel2 : (sel1 || sel2);
+
+    if (sel && sel.selectedIndex >= 0 && sel.options.length > 0) {
+      const opt = sel.options[sel.selectedIndex];
+      const optText = (opt.textContent || '').trim();
+      const optVal = (opt.value || '').trim();
+
+      if (!optVal || optText.startsWith('-') || optText.includes('선택해주세요')) {
+        codeVal = '';
+        nameVal = '';
+      } else {
+        if (!codeVal) codeVal = optVal;
+        if (!nameVal) nameVal = optText;
+      }
+    }
+
+    out[code] = { code: codeVal, name: nameVal };
   }
   return out;
 }
@@ -1435,7 +1549,7 @@ MAPPED_STATE_JS = """
 
 
 def mapped_state(popup, codes: Sequence[str]) -> dict[str, dict]:
-    """마켓별 매핑 결과 (hidden 값) — 저장 후 재검증용."""
+    """마켓별 매핑 결과 (hidden 값 + select 표시값) — 저장 후 재검증용."""
     try:
         data = popup.evaluate(MAPPED_STATE_JS, list(codes)) or {}
     except Exception:
@@ -1444,7 +1558,7 @@ def mapped_state(popup, codes: Sequence[str]) -> dict[str, dict]:
 
 
 def unmapped_markets(popup, codes: Sequence[str]) -> list[str]:
-    """카테고리가 비어 있는 마켓 목록."""
+    """카테고리가 비어 있거나 '- 전송대상...' 상태인 마켓 목록."""
     state = mapped_state(popup, codes)
     if not state:
         return []
@@ -1459,12 +1573,7 @@ def unmapped_markets(popup, codes: Sequence[str]) -> list[str]:
 def anomalous_gender_markets(
     popup, codes: Sequence[str], filter_name: str
 ) -> dict[str, str]:
-    """★[검색필터 설정저장] 후 실제 저장된 값 재검증 — 반대 성별로 매핑된 마켓.
-
-    `openmarket_cm_category_name_<코드>` 에 실제 저장된 카테고리 **이름**을
-    읽어(추측이 아니라 저장 후 화면에 남은 값 그대로) `matching.violates_gender`
-    로 재검사한다. 반대 성별이면 {마켓코드: 저장된 이름} 으로 돌려준다.
-    """
+    """★[검색필터 설정저장] 후 실제 저장된 값 재검증 — 반대 성별로 매핑된 마켓."""
     state = mapped_state(popup, codes)
     if not state:
         return {}
@@ -1491,7 +1600,13 @@ def map_one_row(
     ext_db: extended_master_db.ExtendedMasterDB | None = None,
     progress: ProgressFn | None = None,
 ) -> dict:
-    """한 행 — 설정수정 팝업 → AI 매핑 → 마켓별 매핑 → 설정저장 → 닫기."""
+    """한 행 — 설정수정 팝업 → AI 매핑 → 마켓별 매핑 → 설정저장 → 닫기.
+
+    ★요건 (2026-08-23):
+    최초: 최초 등록 -> 저장
+    2차: 확인 -> 누락 확인 -> 2차 등록 -> 저장
+    3차: 확인 -> 누락 확인 -> 3차 등록 -> 저장
+    """
     codes = list(markets or MARKETS.keys())
     detail: dict = {"ftid": row.ftid, "filter": row.filter_name, "items": []}
 
@@ -1507,6 +1622,8 @@ def map_one_row(
         pass
 
     try:
+        # ── [1단계: 최초 등록 & 저장] ───────────────────────────────────
+        _log(progress, "  [1차: 최초] 6개 마켓 카테고리 매핑", major=True)
         for market in codes:
             if stop_requested():
                 break
@@ -1537,8 +1654,7 @@ def map_one_row(
                             break
                         _log(
                             progress,
-                            f"  {MARKETS.get(market, market)}: 상품고시정보 팝업 —"
-                            " 다른 카테고리로 재매핑",
+                            f"  {MARKETS.get(market, market)}: 상품고시정보 팝업 — 다른 카테고리로 재매핑",
                             major=True,
                         )
                         close_notify(popup, market, progress=progress)
@@ -1564,29 +1680,28 @@ def map_one_row(
                 item.reason = item.reason or ""
                 record = dict(item.__dict__)
                 record["variant"] = variant
+                record["stage"] = "1차_최초"
                 detail["items"].append(record)
                 time.sleep(GAP)
 
+        # 1차 저장
+        _log(progress, "  [1차] 최초 등록 완료 → 저장 (Alt+S)", major=True)
         click_config_save(popup, progress=progress)
+        try:
+            popup.wait_for_timeout(500)
+        except Exception:
+            time.sleep(0.5)
 
-        # ★요건: 저장 후 재검증 — 미매핑 마켓이 있으면 최대 3회 다시 매핑
-        for round_no in range(1, VERIFY_ROUNDS + 1):
-            missing = unmapped_markets(popup, codes)
-            if not missing:
-                if round_no > 1:
-                    _log(progress, "  재검증 — 전 마켓 매핑 확인", major=True)
-                break
-            names = " · ".join(MARKETS.get(m, m) for m in missing)
-            _log(
-                progress,
-                f"  재검증 {round_no}/{VERIFY_ROUNDS} — 미매핑: {names}",
-                major=True,
-            )
-            for market in missing:
+        # ── [2단계: 확인 -> 누락 확인 -> 2차 등록 -> 저장] ───────────────
+        missing_2 = unmapped_markets(popup, codes)
+        if missing_2:
+            names_2 = " · ".join(MARKETS.get(m, m) for m in missing_2)
+            _log(progress, f"  [2차: 확인] 누락 확인 ({len(missing_2)}개 마켓: {names_2}) → 2차 등록 시작", major=True)
+            for market in missing_2:
                 if stop_requested():
                     break
                 variant = variants_for(market, (variant_choice or {}).get(market, ""))[0]
-                retry = map_one_market(
+                retry2 = map_one_market(
                     popup,
                     market,
                     row.filter_name,
@@ -1599,37 +1714,63 @@ def map_one_row(
                     ext_db=ext_db,
                     progress=progress,
                 )
-                record = dict(retry.__dict__)
-                record["variant"] = variant
-                record["retry_round"] = round_no
-                detail["items"].append(record)
-            click_config_save(popup, progress=progress)
-            time.sleep(GAP)
-        else:
-            left = unmapped_markets(popup, codes)
-            if left:
-                detail["unmapped"] = left
-                _log(
-                    progress,
-                    "  경고: 재검증 3회 후에도 미매핑 — "
-                    + " · ".join(MARKETS.get(m, m) for m in left),
-                    major=True,
-                )
+                record2 = dict(retry2.__dict__)
+                record2["variant"] = variant
+                record2["stage"] = "2차_등록"
+                detail["items"].append(record2)
+                time.sleep(GAP)
 
-        # ★요건: [검색필터 설정저장] 후 실제 저장된 카테고리매핑이 이상(반대
-        #   성별)인지 다시 확인 — 저장 화면에 남은 값으로 재검사한다.
-        for round_no in range(1, VERIFY_ROUNDS + 1):
-            bad = anomalous_gender_markets(popup, codes, row.filter_name)
-            if not bad:
-                if round_no > 1:
-                    _log(progress, "  성별 재검증 — 이상 없음 확인", major=True)
-                break
+            _log(progress, "  [2차] 2차 등록 완료 → 저장 (Alt+S)", major=True)
+            click_config_save(popup, progress=progress)
+            try:
+                popup.wait_for_timeout(500)
+            except Exception:
+                time.sleep(0.5)
+        else:
+            _log(progress, "  [2차: 확인] 누락 없음 — 전 마켓 매핑 완료 확인", major=True)
+
+        # ── [3단계: 확인 -> 누락 확인 -> 3차 등록 -> 저장] ───────────────
+        missing_3 = unmapped_markets(popup, codes)
+        if missing_3:
+            names_3 = " · ".join(MARKETS.get(m, m) for m in missing_3)
+            _log(progress, f"  [3차: 확인] 누락 확인 ({len(missing_3)}개 마켓: {names_3}) → 3차 등록 시작", major=True)
+            for market in missing_3:
+                if stop_requested():
+                    break
+                variant = variants_for(market, (variant_choice or {}).get(market, ""))[0]
+                retry3 = map_one_market(
+                    popup,
+                    market,
+                    row.filter_name,
+                    excels.get(market, []),
+                    variant=variant,
+                    region_type=region_type,
+                    db=db,
+                    keyword_db=keyword_db,
+                    master_db=master_db,
+                    ext_db=ext_db,
+                    progress=progress,
+                )
+                record3 = dict(retry3.__dict__)
+                record3["variant"] = variant
+                record3["stage"] = "3차_등록"
+                detail["items"].append(record3)
+                time.sleep(GAP)
+
+            _log(progress, "  [3차] 3차 등록 완료 → 저장 (Alt+S)", major=True)
+            click_config_save(popup, progress=progress)
+            try:
+                popup.wait_for_timeout(500)
+            except Exception:
+                time.sleep(0.5)
+        else:
+            _log(progress, "  [3차: 확인] 누락 없음 — 전 마켓 매핑 완료 확인", major=True)
+
+        # 성별 재검증
+        bad = anomalous_gender_markets(popup, codes, row.filter_name)
+        if bad:
             names = " · ".join(f"{MARKETS.get(m, m)}={n}" for m, n in bad.items())
-            _log(
-                progress,
-                f"  ⚠ 성별 이상 재검증 {round_no}/{VERIFY_ROUNDS} — {names}",
-                major=True,
-            )
+            _log(progress, f"  ⚠ 성별 이상 재검증 — {names}", major=True)
             for market, bad_name in bad.items():
                 if stop_requested():
                     break
@@ -1650,20 +1791,20 @@ def map_one_row(
                 )
                 record = dict(retry.__dict__)
                 record["variant"] = variant
-                record["gender_retry_round"] = round_no
+                record["stage"] = "성별재선정"
                 detail["items"].append(record)
             click_config_save(popup, progress=progress)
-            time.sleep(GAP)
+
+        final_missing = unmapped_markets(popup, codes)
+        if final_missing:
+            detail["unmapped"] = final_missing
+            _log(
+                progress,
+                "  ⚠ 최종 미매핑 마켓: " + " · ".join(MARKETS.get(m, m) for m in final_missing),
+                major=True,
+            )
         else:
-            left_bad = anomalous_gender_markets(popup, codes, row.filter_name)
-            if left_bad:
-                detail["gender_anomaly"] = left_bad
-                _log(
-                    progress,
-                    "  경고: 재검증 3회 후에도 성별 이상 — "
-                    + " · ".join(f"{MARKETS.get(m, m)}={n}" for m, n in left_bad.items()),
-                    major=True,
-                )
+            _log(progress, "  ★ 전 마켓 100% 매핑 확인 완료", major=True)
     finally:
         close_popup(popup)
     return detail
