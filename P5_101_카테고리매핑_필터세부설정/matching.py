@@ -178,6 +178,42 @@ GENDER_WORDS = {
 CHILD_WORDS = ("아동", "유아동", "유아", "영유아", "키즈", "주니어", "베이비", "남아", "여아")
 
 
+# ★절대 배제 단어 (요건 2026-08-23):
+# 1) 브랜드, 여행, 티켓, 스포츠, 등산, 낚시, 배낭, 유아, 아동, 운동, 여가, 중성, 혼용, 공용, 유니섹스, 남녀 등
+# 2) 골프, 안전, 구기, 꽃, 생필품, 배달음식, 수입명품, 가구, DIY, PC, 주변기기, 가공식품 등 (※ 생활용품은 배제 단어에서 제외)
+# 단, "망고 필터명"에 명백히 포함된 단어의 경우에는 적용에서 제외 (허용).
+FORBIDDEN_BASE_WORDS: tuple[str, ...] = (
+    "브랜드", "여행", "티켓", "스포츠", "등산", "낚시", "배낭",
+    "유아", "아동", "유아동", "영유아", "키즈", "주니어", "베이비", "남아", "여아",
+    "운동", "여가",
+    "중성", "혼용", "공용", "유니섹스", "남녀",
+    "골프", "안전", "구기", "꽃", "생필품", "배달음식", "배달",
+    "수입명품", "가구", "diy", "pc", "주변기기", "가공식품", "식품",
+    "상품권", "이용권",
+)
+
+
+def forbidden_words_for(filter_name: str) -> tuple[str, ...]:
+    """필터명에 없는 절대 배제 단어 목록을 구한다 (필터명에 있으면 배제 대상에서 제외)."""
+    filter_norm = normalize(filter_name)
+    return tuple(w for w in FORBIDDEN_BASE_WORDS if normalize(w) not in filter_norm)
+
+
+def is_forbidden_category(path: str, filter_name: str) -> bool:
+    """카테고리 경로가 필터명에 없는 절대 배제 단어를 포함하는가."""
+    forbidden = forbidden_words_for(filter_name)
+    path_norm = normalize(path)
+    return any(normalize(w) in path_norm for w in forbidden)
+
+
+def strip_forbidden_categories(paths: Sequence[str], filter_name: str) -> list[str]:
+    """필터명에 없는 절대 배제 단어가 들어간 카테고리를 완전히 제거한다."""
+    forbidden = forbidden_words_for(filter_name)
+    if not forbidden:
+        return list(paths)
+    return [p for p in paths if not any(normalize(w) in normalize(p) for w in forbidden)]
+
+
 def mentions_child(text: str) -> bool:
     low = normalize(text)
     return any(normalize(w) in low for w in CHILD_WORDS if w)
@@ -398,12 +434,16 @@ def filter_paths(paths: Iterable[str], names: Sequence[str]) -> list[str]:
     return [p for p in paths if any(path_hit(p, n) for n in names)]
 
 
-def specificity(path: str, parsed: ParsedFilter) -> tuple[int, int]:
+def specificity(path: str, parsed: ParsedFilter, *, market: str = "") -> tuple[int, int]:
     """정렬 기준 — (일치한 조각 수, 경로 짧은 순)."""
     hits = 0
     for name in [parsed.top, parsed.mid, *parsed.lows]:
         if name and path_hit(path, name):
             hits += 1
+    # 쿠팡 5단계에서 5단계에 고유 검색어가 없는 경우 길이 페널티(-len(path)) 무력화 (일반 단어 우선권 보호)
+    levels = split_levels(path)
+    if (market in ("COUP", "쿠팡") or not market) and len(levels) >= 5 and not leaf_matches_term(path, parsed):
+        return (hits, 0)
     return (hits, -len(path))
 
 
@@ -415,7 +455,65 @@ def specificity(path: str, parsed: ParsedFilter) -> tuple[int, int]:
 #   남성 > 중성=혼용=공용 순 우선 적용
 #   여성 > 공용=혼용=중성 순 적용
 NEUTRAL_GENDER_WORDS = ("중성", "혼용", "공용", "유니섹스", "남녀")
-OVERSEAS_WORDS = ("해외", "역직구", "해외직구")
+OVERSEAS_WORDS: tuple[str, ...] = (
+    "해외", "역직구", "해외직구", "해외의류", "해외배송", "해외패션", "해외쇼핑",
+    "수입", "수입명품", "병행수입", "직구",
+)
+
+# ★요건 2026-08-23 (쿠팡 5단계 최적 선정):
+# 쿠팡 카테고리 매핑 시 4단계까지 일치하면 5단계는 임의의 한 개, 즉 5단계 단어 중
+# 가장 일반적이고 범주가 넓은 하나("기타", "일반" 등) 또는 선정이 어려운 경우 가장 첫 번째를 선택.
+GENERAL_LEAF_WORDS: tuple[str, ...] = (
+    "기타", "일반", "기본", "베이직", "단품", "세트", "모음",
+    "기타소품", "기타잡화", "기타의류", "기타신발", "기타용품", "전체",
+)
+
+
+def is_general_leaf(leaf_text: str) -> bool:
+    """5단계(리프) 단어가 가장 일반적이고 범주가 넓은 단어인가."""
+    norm = normalize(leaf_text)
+    return any(normalize(w) in norm for w in GENERAL_LEAF_WORDS)
+
+
+def leaf_matches_term(path: str, parsed: "ParsedFilter") -> bool:
+    """경로의 5단계(리프) 카테고리명에 필터명의 하위 검색어가 명백히 포함되어 있는가."""
+    levels = split_levels(path)
+    if len(levels) < 5:
+        return False
+    leaf = levels[-1]
+    leaf_norm = normalize(leaf)
+
+    # 4단계까지의 부모 경로에 이미 등장한 단어(예: "셔츠")를 제외한 5단계 고유 수식어 추출
+    parent_path = " ".join(levels[:-1])
+    parent_norm = normalize(parent_path)
+    for parent_lv in levels[:-1]:
+        p_norm = normalize(parent_lv)
+        if p_norm and len(p_norm) >= 2:
+            leaf_norm = leaf_norm.replace(p_norm, "")
+
+    if leaf_norm and len(leaf_norm) >= 2:
+        return leaf_norm in normalize(parsed.raw)
+
+    for low in parsed.lows:
+        low_norm = normalize(low)
+        if low_norm and len(low_norm) >= 2 and low_norm not in parent_norm:
+            if low_norm in normalize(leaf):
+                return True
+
+    return False
+
+
+def has_overseas(path: str) -> bool:
+    """경로에 '해외' 관련 단어가 포함되어 있는가."""
+    path_norm = normalize(path)
+    return any(normalize(w) in path_norm for w in OVERSEAS_WORDS)
+
+
+def filter_by_region(paths: Sequence[str], region_type: str = "국내") -> list[str]:
+    """국내면 '해외' 단어 완전 배제, 해외면 모두 유지."""
+    if region_type == "국내":
+        return [p for p in paths if not has_overseas(p)]
+    return list(paths)
 
 
 def _matches_canonical_group(path: str, parsed: "ParsedFilter") -> bool:
@@ -462,7 +560,9 @@ def _mentioned_activity(text: str) -> str:
     return ""
 
 
-def priority_rank(path: str, parsed: "ParsedFilter") -> int:
+def priority_rank(
+    path: str, parsed: "ParsedFilter", *, market: str = "", region_type: str = "국내"
+) -> int:
     """값이 클수록 우선 — 동점일 때 최종 선택 순서를 가른다."""
     gender = gender_of(parsed.raw)
     score = 0
@@ -471,11 +571,7 @@ def priority_rank(path: str, parsed: "ParsedFilter") -> int:
     if gender:
         # 성별 정확 일치가 중성/혼용/공용·무표기보다, 그리고(자동으로)
         # 성별 무관한 활동명(골프·낚시·스포츠 등)만 일치하는 경로보다
-        # 항상 우선한다. ★무표기(성별 글자가 아예 없는 경로)도 명시적
-        # "공용/중성"과 동급으로 본다 — 실제 마켓 데이터는 성별 구분이
-        # 필요 없는 품목(예: "스니커즈")에 성별 표기를 아예 안 붙이는
-        # 경우가 흔한데, 이걸 무표기라고 감점하면 정확한 정식 분류가
-        # 밀리고 반대로 품목이 안 맞는 성별-표기 후보가 이겨버린다.
+        # 항상 우선한다.
         if has_gender(path, gender):
             score += 100
         elif any(normalize(w) in normalize(path) for w in NEUTRAL_GENDER_WORDS) or not gender_of(path):
@@ -487,8 +583,30 @@ def priority_rank(path: str, parsed: "ParsedFilter") -> int:
             score += 3
         elif path_hit(path, "패션의류"):
             score += 5
-    if not any(path_hit(path, w) for w in OVERSEAS_WORDS):
+
+    # ★요건 4 & 5: 국내/해외 구분
+    # 4. "국내"이면 "해외" 단어가 들어간 카테고리 완전 배제 (대폭 감점)
+    # 5. "해외"인 경우에도 "해외" 단어가 들어간 카테고리는 우선순위를 가장 낮게 부여 -> 최후의 수단으로 등록!
+    is_overseas_path = has_overseas(path)
+    if not is_overseas_path:
         score += 10  # 국내 > 해외
+    else:
+        if region_type == "국내":
+            score -= 1000  # 국내 모드에서는 해외 카테고리 강력 배제
+        else:
+            score -= 500   # 해외 모드에서도 일반/국내 카테고리 우선, 해외는 최후의 수단으로만
+
+    # ★요건 2026-08-23: 쿠팡 카테고리 매핑 시 4단계까지 일치할 때:
+    # 1. 5단계 카테고리명에 명백히 검색어가 있는 경우: 그 카테고리를 최우선 선택 (+50)
+    # 2. 5단계에 검색어가 없는 경우: 가장 일반적이고 범주가 넓은 하나("기타", "일반" 등) 우선 (+15)
+    # 3. 선정이 어려운 경우: 가장 첫 번째 선택 (pick_best의 stable sort로 처리)
+    levels = split_levels(path)
+    if (market in ("COUP", "쿠팡") or not market) and len(levels) >= 5:
+        if leaf_matches_term(path, parsed):
+            score += 50
+        elif is_general_leaf(levels[-1]):
+            score += 15
+
     # ★"성별 > 골프/낚시/스포츠", "상위:남성-팬츠 > 상위스포츠/팬츠":
     #   필터명이 요청하지 않은 활동 전용 카테고리는 일반 카테고리보다
     #   후순위로 — 단, 필터명이 그 활동을 직접 요청했다면 오히려 우대.
@@ -502,14 +620,23 @@ def priority_rank(path: str, parsed: "ParsedFilter") -> int:
     return score
 
 
-def pick_best(paths: Sequence[str], parsed: ParsedFilter) -> str:
+def pick_best(
+    paths: Sequence[str], parsed: ParsedFilter, *, market: str = "", region_type: str = "국내"
+) -> str:
     if not paths:
         return ""
+    # 4단계까지 일치하는 5단계 후보군이 있을 때 일반적 단어 우선 혹은 첫 번째를 우선하기 위해
+    # 원래 순서(인덱스)를 보존하여 안정적인 정렬(stable sort) 수행
+    indexed = list(enumerate(paths))
     return sorted(
-        paths,
-        key=lambda p: (priority_rank(p, parsed), *specificity(p, parsed)),
+        indexed,
+        key=lambda ip: (
+            priority_rank(ip[1], parsed, market=market, region_type=region_type),
+            *specificity(ip[1], parsed, market=market),
+            -ip[0],  # 동점일 때 원래 목록의 앞선 순서(첫 번째) 우선
+        ),
         reverse=True,
-    )[0]
+    )[0][1]
 
 
 def kind_of(parsed: ParsedFilter) -> str:
@@ -1025,7 +1152,9 @@ def clothing_priority(paths: Sequence[str], gender: str = "") -> list[str]:
     return list(paths)
 
 
-def constrain(paths: Sequence[str], parsed: "ParsedFilter") -> tuple[list[str], list[str]]:
+def constrain(
+    paths: Sequence[str], parsed: "ParsedFilter", *, region_type: str = "국내"
+) -> tuple[list[str], list[str]]:
     """규칙 1·2·3·4 로 후보를 좁힌다. 반환: (후보, 적용된 규칙 설명).
 
     ★요건재정의(2026-08-22 B-10) 순서: 의류↔신발·선글라스↔시계 같은 계열
@@ -1037,6 +1166,13 @@ def constrain(paths: Sequence[str], parsed: "ParsedFilter") -> tuple[list[str], 
     """
     pool = [p for p in paths if str(p or "").strip()]
     notes: list[str] = []
+
+    # ★요건 3: 절대 배제 단어 카테고리 제거 (필터명에 없는 경우)
+    pool = strip_forbidden_categories(pool, parsed.raw)
+
+    # ★요건 4 & 5: 국내/해외 지역 필터링 (국내면 해외 단어 완전 배제)
+    if region_type == "국내":
+        pool = filter_by_region(pool, "국내")
 
     cls = class_of(parsed.raw)
     if cls:
@@ -1083,6 +1219,8 @@ def find_category(
     *,
     exclude: Sequence[str] = (),
     force: bool = True,
+    market: str = "",
+    region_type: str = "국내",
     db=None,
     keyword_db=None,
     ext_db=None,
@@ -1102,17 +1240,10 @@ def find_category(
 
     절대규칙(예외 없음, 어떤 단계에서도 뚫지 않음):
       · 반대 성별 카테고리는 어떤 경우에도 고르지 않는다
-      · "브랜드" 가 붙은 카테고리는 어떤 경우에도 확정하지 않는다
+      · "브랜드, 여행, 티켓, 스포츠, 등산, 낚시, 배낭, 유아, 아동, 운동, 여가" 등 배제 단어(필터명에 없는 경우) 절대 배제
+      · "국내" 모드 시 "해외" 카테고리는 어떤 경우에도 고르지 않는다 (완전 배제)
       · 최적 카테고리는 반드시 엑셀 목록 범위 안의 값이어야 한다(호출측 `ensure_from`)
       · 의류↔신발, 선글라스↔시계(잡화 결합 표기는 예외) 처럼 다른 계열은 섞지 않는다
-
-    `exclude` 는 이미 시도한 카테고리. `db` 는 `category_db.CategoryDB` —
-    5) 단계에서 연관검색어를 찾는 데 쓴다(없으면 5) 단계는 건너뛴다).
-    `keyword_db` 는 `keyword_dictionary.KeywordDB`("최신성 우선" 원칙에
-    따라 연관검색어DB의 공식 기준) — 같은 5) 단계에서 `resolve()` 로
-    검색어를 카테고리명으로 확정해 확장 후보에 더한다.
-    `ext_db` 는 `extended_master_db.ExtendedMasterDB`(표준 확장형DB) —
-    5) 단계에서 `expand_terms()` 로 범주·범위를 확장한다.
     """
     parsed = parse_filter_name(name)
     skip = {normalize(e) for e in (exclude or []) if str(e or "").strip()}
@@ -1130,24 +1261,19 @@ def find_category(
             return "", f"성별({gender}) 조건에 맞는 카테고리 없음"
         all_paths = allowed
 
-    # ★절대규칙(예외 없음): "브랜드" 가 붙은 카테고리는 어떤 경우에도
-    #   확정하지 않는다. 사용자가 엑셀에서 "브랜드" 를 직접 지운 이유가
-    #   바로 이것 — 실제 마켓 엑셀엔 정식 카테고리와 별도로 "브랜드
-    #   여성의류 > …" 처럼 브랜드관 전용 트리가 통째로 또 있는데, 엑셀에
-    #   있다고 해서 그게 정답인 게 아니다. "가장 비슷한 거라도 전달해"
-    #   원칙은 성별·브랜드 절대규칙에는 적용되지 않는다 — 그 둘을 뚫고
-    #   "가장 비슷한 것"을 억지로 만들지 않는다.
-    non_brand = [p for p in all_paths if not _contains_word(p, "브랜드")]
-    if not non_brand:
-        return "", "브랜드 카테고리만 있음 — 매핑하지 않음"
-    all_paths = non_brand
+    # ★요건 3: 절대 배제 단어 카테고리는 어떤 경우에도 확정하지 않는다 (필터명에 없는 경우)
+    non_forbidden = strip_forbidden_categories(all_paths, parsed.raw)
+    if not non_forbidden:
+        return "", "배제 단어 카테고리만 있음 — 매핑하지 않음"
+    all_paths = non_forbidden
+
+    # ★요건 4 & 5: 국내 모드 시 "해외" 카테고리 완전 배제
+    if region_type == "국내":
+        non_overseas = filter_by_region(all_paths, "국내")
+        if non_overseas:
+            all_paths = non_overseas
 
     # ★소프트규칙: 동떨어진 형제 품목은 되도록 고르지 않는다.
-    #   예) "맨투맨/후드" 를 찾는데 "패딩"(같은 의류 계열의 다른 구체적
-    #   품목)을 대신 고르면 안 된다. 이후 모든 단계가 보는 후보 풀
-    #   자체에서 뺀다. 다만 안전한 후보가 하나도 없으면(위와 동일한
-    #   이유로) 포기하지 않고 원래 후보로 계속 진행해 "가장 비슷한 것"을
-    #   반드시 고른다.
     if parsed.mid or parsed.lows:
         _wanted = frozenset(
             n for n in (normalize(x) for x in expand_synonyms([parsed.mid, *parsed.lows])) if n
@@ -1164,7 +1290,7 @@ def find_category(
         all_paths = non_hint_paths
 
     # ★규칙 2·3·4 — 성별·품목명·의류 우선순위(성별 우선)로 후보를 먼저 좁힌다
-    paths, notes = constrain(all_paths, parsed)
+    paths, notes = constrain(all_paths, parsed, region_type=region_type)
     tag = (" [" + " · ".join(notes) + "]") if notes else ""
     if not paths:
         paths, tag = all_paths, ""
@@ -1193,26 +1319,28 @@ def find_category(
                 narrowed = filter_paths(low_hits, mid_terms)
             if narrowed:
                 return (
-                    pick_best(narrowed, parsed),
+                    pick_best(narrowed, parsed, market=market, region_type=region_type),
                     f"3) 우선순위(상위·중위 일치, {round_no}회차)" + tag,
                 )
             # 국내/해외 → 국내 OK
             domestic = [p for p in low_hits if not any(path_hit(p, w) for w in OVERSEAS_WORDS)]
             if domestic and len(domestic) < len(low_hits):
                 return (
-                    pick_best(domestic, parsed),
+                    pick_best(domestic, parsed, market=market, region_type=region_type),
                     f"3) 우선순위(국내, {round_no}회차)" + tag,
                 )
             # 정보화DB 로도 못 좁히면 그 안에서 가장 그럴듯한 것 하나
             return (
-                pick_best(low_hits, parsed),
+                pick_best(low_hits, parsed, market=market, region_type=region_type),
                 f"3) 우선순위(정보화DB 조회, {round_no}회차)" + tag,
             )
 
         # 하위 검색 0건 → 요건 D-11: 하위(1차) 없으면 중위(2차)로 전체 재검색
         mid_hits = filter_paths(paths, mid_terms)
-        if mid_hits:
-            return pick_best(mid_hits, parsed), f"3) 중위 2차검색({round_no}회차)" + tag
+        if len(mid_hits) == 1:
+            return mid_hits[0], f"3) 중위 2차검색 1건({round_no}회차)" + tag
+        if len(mid_hits) > 1:
+            return pick_best(mid_hits, parsed, market=market, region_type=region_type), f"3) 중위 2차검색({round_no}회차)" + tag
 
         # 4) 포괄성(확장범주) 범위로 찾는다
         kind = kind_of(parsed)
@@ -1220,7 +1348,7 @@ def find_category(
         if generic:
             narrowed = filter_paths(generic, low_terms) or filter_paths(generic, mid_terms)
             target = narrowed or generic
-            return pick_best(target, parsed), f"4) 확장범주({kind}, {round_no}회차)" + tag
+            return pick_best(target, parsed, market=market, region_type=region_type), f"4) 확장범주({kind}, {round_no}회차)" + tag
 
         # 5) 정보화DB에서 연관검색어를 찾아 검색어를 확장하고 다음 회차로
         #   ★연관검색어는 보통 리프 전체("야구모자/뉴에라/스냅백")처럼 여러
@@ -1281,7 +1409,10 @@ def find_category(
 
     # 6) 그래도 없으면 — 망고 필터명과 가장 가까운 카테고리 하나를 반드시 지정
     if force:
-        nearest, score = nearest_category(name, paths)
+        pool = paths if paths else all_paths
+        nearest, score = nearest_category(name, pool)
         if nearest:
             return nearest, f"6) 근접매핑 강제지정 ({score:.2f})" + tag
+        if all_paths:
+            return all_paths[0], "6) 카테고리 강제지정(폴백)" + tag
     return "", "미검출"

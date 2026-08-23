@@ -1481,13 +1481,27 @@ class BoardApp(tk.Tk):
         self.cbo_p5m_site = ttk.Combobox(
             r0,
             textvariable=self.var_p5m_site,
-            width=20,
+            width=16,
             values=ih.load(P5M_SITE_HISTORY),
         )
         self.cbo_p5m_site.pack(side="left")
         self.cbo_p5m_site.bind(
             "<<ComboboxSelected>>", lambda e: self._on_p5m_input_picked()
         )
+
+        # ★요건 2: 사이트명 우측에 "국내 / 해외 구분" 입력필드(라디오버튼)
+        tk.Label(r0, text="구분", width=5, anchor="e", bg="#ffffff", font=("Malgun Gothic", 9, "bold")).pack(side="left", padx=(8, 2))
+        self.var_p5m_region = tk.StringVar(value="국내")
+        for r_label in ("국내", "해외"):
+            tk.Radiobutton(
+                r0,
+                text=r_label,
+                value=r_label,
+                variable=self.var_p5m_region,
+                bg="#ffffff",
+                font=("Malgun Gothic", 9, "bold" if r_label == "국내" else "normal"),
+            ).pack(side="left", padx=(0, 4))
+
         tk.Label(
             r0,
             text=f"※ 현재는 {p5_mapping.ALLOWED_SITES[0]} 만 수행 (검증 후 확대)",
@@ -1776,6 +1790,8 @@ class BoardApp(tk.Tk):
             folder,
             "--site-id",
             site,
+            "--region-type",
+            self.var_p5m_region.get().strip() or "국내",
             "--row-from",
             str(start),
             "--row-to",

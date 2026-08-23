@@ -407,13 +407,14 @@ def test_map_one_market_touches_mango_exactly_once(monkeypatch):
         *,
         variant="",
         exclude=(),
+        region_type="국내",
         db=None,
         keyword_db=None,
         master_db=None,
         ext_db=None,
         progress=None,
     ):
-        cat, _ = mc.best_category_with_step(name, cats, exclude=exclude)
+        cat, _ = mc.best_category_with_step(name, cats, exclude=exclude, region_type=region_type)
         calls.append(cat)
         return mc.MappedItem(market, cat, 1.0, False, "목록 선택 실패")
 
@@ -1157,7 +1158,7 @@ def test_map_one_market_blocks_opposite_gender(monkeypatch):
     excel = ["남성패션 > 모자 > 비니", "여성패션 > 모자 > 비니"]
     calls = {"n": 0}
 
-    def fake_best(name, cats, *, exclude=(), db=None, keyword_db=None, ext_db=None):
+    def fake_best(name, cats, *, exclude=(), region_type="국내", db=None, keyword_db=None, ext_db=None, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             return "남성패션 > 모자 > 비니", "테스트"      # 규칙 위반 값

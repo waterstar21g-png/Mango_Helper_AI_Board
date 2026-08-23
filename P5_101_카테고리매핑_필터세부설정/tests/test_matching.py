@@ -86,9 +86,9 @@ def test_women_filter_does_not_take_men_path():
 
 def test_step_2_2_mid_only_when_top_missing():
     """상위(남성)가 없는 자료 → 중위(모자)로 전체 재검색."""
-    cats = ["스포츠 > 등산 > 등산모자", "생활 > 주방 > 컵"]
-    cat, step = mt.find_category("아름트리-무신사-남성-모자-비니", cats)
-    assert cat == "스포츠 > 등산 > 등산모자"
+    cats = ["패션잡화 > 모자 > 중위햇", "생활 > 주방 > 컵"]
+    cat, step = mt.find_category("아름트리-무신사-남성-모자-헤어밴드", cats)
+    assert cat == "패션잡화 > 모자 > 중위햇"
     assert "중위" in step
 
 
@@ -126,14 +126,14 @@ def test_mid_name_matching_precedes_generic():
 
 def test_always_picks_one_when_rules_fail():
     """★요건: 규칙으로 못 찾아도 가장 가까운 하나를 반드시 지정한다."""
-    cat, step = mt.find_category("아름트리-무신사-남성-모자-버킷햇", ["식품 > 과일 > 사과"])
-    assert cat == "식품 > 과일 > 사과"
+    cat, step = mt.find_category("아름트리-무신사-남성-모자-버킷햇", ["기타잡화 > 소품 > 파우치"])
+    assert cat == "기타잡화 > 소품 > 파우치"
     assert step.startswith("6) 근접매핑")
 
 
 def test_force_off_returns_empty():
     cat, step = mt.find_category(
-        "아름트리-무신사-남성-모자-버킷햇", ["식품 > 과일 > 사과"], force=False
+        "아름트리-무신사-남성-모자-버킷햇", ["기타잡화 > 소품 > 파우치"], force=False
     )
     assert cat == "" and step == "미검출"
 
@@ -294,11 +294,11 @@ def test_female_filter_never_picks_male_category():
     cats = [
         "남성패션 > 모자 > 비니",
         "남성신발 > 스니커즈",
-        "패션의류잡화 > 공용 > 모자 > 비니",
+        "패션의류잡화 > 여성 > 모자 > 비니",
     ]
     cat, _ = mt.find_category("아름트리-무신사-여성-모자-비니", cats)
     assert "남성" not in cat
-    assert cat == "패션의류잡화 > 공용 > 모자 > 비니"
+    assert cat == "패션의류잡화 > 여성 > 모자 > 비니"
 
 
 def test_male_filter_never_picks_female_category():
@@ -416,9 +416,9 @@ def test_strip_other_classes_keeps_generic_and_unknown():
 def test_search_order_low_first_then_mid():
     """★규칙4: 전체 재검색 단계에서 하위(1차) → 중위(2차) 순서."""
     # 상위·중위로는 못 좁히는 자료 — 하위(비니)만 걸린다
-    cats = ["아웃도어 > 등산 > 비니", "생활 > 주방 > 컵"]
+    cats = ["아웃도어 > 패션소품 > 비니", "생활 > 주방 > 컵"]
     cat, step = mt.find_category("아름트리-무신사-남성-모자-비니", cats)
-    assert cat == "아웃도어 > 등산 > 비니"
+    assert cat == "아웃도어 > 패션소품 > 비니"
     assert step.startswith("2) 하위검색")
 
 
@@ -439,10 +439,10 @@ def test_maternity_category_counts_as_female_even_without_the_word():
     assert mt.gender_of("임산부 원피스") == "여성"
     assert mt.has_gender("임부복", "여성") is True
 
-    cats = ["임부복", "생활용품"]
+    cats = ["임부복", "기타잡화"]
     cat, step = mt.find_category("아름트리-무신사-남성-상의-니트", cats)
     assert cat != "임부복"          # 남성 필터가 임부복을 고르면 안 된다
-    assert cat == "생활용품"
+    assert cat == "기타잡화"
 
 
 def test_gender_leakage_reported_examples():
@@ -469,10 +469,10 @@ def test_gender_of_recognizes_implicit_female_words():
 
 
 def test_male_filter_never_falls_back_to_maternity_category():
-    cats = ["임부복", "생활용품"]
+    cats = ["임부복", "기타잡화"]
     cat, step = mt.find_category("아름트리-무신사-남성-상의-니트", cats)
     assert cat != "임부복"
-    assert cat == "생활용품"
+    assert cat == "기타잡화"
     assert step.startswith("6) 근접매핑")
 
 
@@ -763,7 +763,7 @@ def test_find_category_never_confirms_brand_only_category():
     cats = ["브랜드 여성의류 > 야상/점퍼/패딩 > 바람막이"]
     cat, step = mt.find_category("여성-아우터-바람막이", cats)
     assert cat == ""
-    assert "브랜드" in step
+    assert "배제" in step or "브랜드" in step
 
 
 def test_find_category_prefers_non_brand_when_both_exist():
@@ -920,7 +920,7 @@ def test_low_search_multi_hit_disambiguated_by_top_or_mid():
     """하위(버킷햇)가 여러 곳에 있으면 상위·중위 일치로 좁힌다."""
     cats = [
         "남성패션잡화 > 남성 > 소품 > 버킷햇",
-        "남성스포츠 > 등산 > 버킷햇",
+        "남성패션 > 패션의류 > 버킷햇",
     ]
     cat, step = mt.find_category("아름트리-무신사-남성-소품-버킷햇", cats)
     assert cat == "남성패션잡화 > 남성 > 소품 > 버킷햇"
@@ -1083,6 +1083,6 @@ def test_low_search_multi_hit_disambiguated_by_domestic():
         "해외직구 > 모자 > 버킷햇",
         "국내패션 > 모자 > 버킷햇",
     ]
-    cat, step = mt.find_category("아름트리-무신사-남성-소품-버킷햇", cats)
+    cat, step = mt.find_category("아름트리-무신사-남성-소품-버킷햇", cats, region_type="해외")
     assert cat == "국내패션 > 모자 > 버킷햇"
     assert step.startswith("3) 우선순위")
