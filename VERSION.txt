@@ -1,3 +1,35 @@
+버전 2.35.0 (Python 보드)
+업데이트: 사용자 제공 CATEGORY_MASTER+KEYWORD_DICTIONARY CSV를 1순위
+          마스터DB로 연결 — 기존 정적 사전 대신 실데이터가 우선한다.
+1) ★요건: "기존 DB를 대체하여 지금 주는 걸 활용하는 프로그램을 구현해.
+   DB는 CSV 자료 그대로 DB화하고 GitHub에 올려서 메모리로 보관하여
+   속도를 높이도록 해" — 사용자가 업로드한 CATEGORY_MASTER(17,591건·
+   6개 마켓)·KEYWORD_DICTIONARY(25,399건, EX=완전일치·SY=유의어·
+   MO=형태소분리) CSV를 UTF-8로 변환해 `data/category_master.csv`·
+   `data/keyword_dictionary.csv` 로 저장했다.
+2) 신설 `category_master_db.py` — CSV를 그대로 읽어 마켓별 카테고리
+   트리(Parent_ID)·검색어 사전을 메모리에 올린다. 매번 CSV(약 43,000
+   줄)를 재파싱하지 않도록 `data/category_master_db.json` 단일 캐시로
+   저장·재사용한다(로드 0.07~0.12초).
+3) `resolve_ranked()` — Priority(1=EX·2=SY·3=MO) 순으로 여러 순위의
+   후보를 반환해, 상위 호출부가 성별·브랜드 절대규칙으로 앞 후보를
+   건너뛰고 다음 후보를 계속 시도할 수 있게 했다. "미검출 절대 금지"
+   원칙에 따라 그 마켓에 카테고리가 있으면 최근접 강제지정(4단계)으로
+   반드시 하나를 확정한다.
+4) `map_categories.best_category_via_master()` — 이 마스터DB를
+   **1순위**로 쓰고, 확실한 매칭이 없을 때만 기존 matching.py
+   캐스케이드(2·3순위: category_db·keyword_dictionary)로 넘어가도록
+   `_map_once`·`map_one_market`·`map_one_row`·`run_mapping`·`run_dry`
+   전체를 연결했다. 성별·브랜드는 절대규칙(반대 성별/브랜드만 있으면
+   "미검출"로 두고 다음 단계로 넘김), 건강용품·계열불일치는 소프트
+   규칙(대안 없으면 그거라도 사용)으로 구현했다.
+5) 실사례 감사로 발견한 버그 2건 추가 수정:
+   a) `_is_non_product_hint` 가 리프만 보아 "건강/의료용품 > 실버용품 >
+      휠체어 악세서리"(최상위에만 "건강"이 있음) 를 놓쳤다 — 경로 전체
+      텍스트를 보도록 수정.
+   b) `GENDER_WORDS` 에 "남아"·"여아"(아이) 가 없어 "여성-신발-구두"
+      검색이 "남아구두"(남자아이 신발)로 새는 사고 — 성별 판정에 추가.
+
 버전 2.34.0 (Python 보드)
 업데이트: 실사례 기반 매칭 정확도 버그 4건 수정 + 성능 5배 개선.
 1) ★요건: "매핑이 개판이다, AI자동매핑보다 확률이 떨어진다" 지적에 따라

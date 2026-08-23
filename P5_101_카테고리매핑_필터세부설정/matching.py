@@ -153,12 +153,17 @@ _SPLIT = re.compile(r"[\s/·,()\[\]|]+")
 
 # 최근접 판단 보조 — 성별 · 소재 · 용도/활용
 GENDER_WORDS = {
-    "남성": ("남성", "남자", "맨즈", "men"),
+    # ★"남아"(남자아이)도 포함한다 — 실사례: "여성-신발-구두" 검색이
+    # "유아동신발/잡화 > 유아동신발 > 남아구두"(남자아이 구두)로 새는
+    # 사고가 났다. "남아" 는 "남자"와 다른 글자라 기존 목록으로는
+    # 반대 성별로 인식되지 않았다.
+    "남성": ("남성", "남자", "남아", "맨즈", "men"),
     # ★"임부복" 처럼 '여성' 이란 글자가 없어도 여성 전용 카테고리인 말들을
     #   포함한다 — 없으면 남성 필터가 아무 남성 카테고리도 없을 때 이런
     #   카테고리를 '성별 무관'으로 보고 최근접 후보로 골라버린다(오매칭).
+    #   "여아"(여자아이)도 같은 이유로 포함한다.
     "여성": (
-        "여성", "여자", "우먼", "women", "woman", "ladies",
+        "여성", "여자", "여아", "우먼", "women", "woman", "ladies",
         "임부", "임산부", "마터니티", "maternity",
     ),
     "공용": ("공용", "유니섹스", "남녀"),
@@ -599,10 +604,14 @@ _NON_PRODUCT_HINT_WORDS_NORM = tuple(
 
 
 def _is_non_product_hint(path: str) -> bool:
-    leaf_norm = normalize(leaf_of(path))
-    if not leaf_norm:
+    """★실사례: "건강/의료용품 > 실버용품 > 휠체어 악세서리" 처럼 "건강"
+    글자가 리프가 아니라 최상위(대분류)에만 있어도, 그 트리 전체가 건강·
+    의료용품 매장이라는 신호다 — 경로 전체 텍스트를 본다(리프만 보면
+    놓친다)."""
+    path_norm = normalize(path)
+    if not path_norm:
         return False
-    return any(nw in leaf_norm for nw in _NON_PRODUCT_HINT_WORDS_NORM)
+    return any(nw in path_norm for nw in _NON_PRODUCT_HINT_WORDS_NORM)
 
 
 # ★DB화 — 검색해서 없을 때 "안전하게" 물러날 수 있는 일반화(상위) 폴백어.

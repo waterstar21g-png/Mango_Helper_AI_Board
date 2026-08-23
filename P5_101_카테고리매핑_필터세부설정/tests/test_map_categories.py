@@ -400,7 +400,17 @@ def test_map_one_market_touches_mango_exactly_once(monkeypatch):
     calls: list[str] = []
 
     def fake_once(
-        popup, market, name, cats, *, variant="", exclude=(), db=None, keyword_db=None, progress=None
+        popup,
+        market,
+        name,
+        cats,
+        *,
+        variant="",
+        exclude=(),
+        db=None,
+        keyword_db=None,
+        master_db=None,
+        progress=None,
     ):
         cat, _ = mc.best_category_with_step(name, cats, exclude=exclude)
         calls.append(cat)
@@ -501,6 +511,162 @@ def test_run_dry_builds_and_uses_keyword_db():
     에 실제로 전달하는지(예외 없이 끝까지 도는지) 확인."""
     out = mc.run_dry(["남성 비니"], {"AUC20": AUCTION})
     assert out[0]["items"][0]["category"]
+
+
+# ── 마스터DB(사용자 제공 CSV) — 요건 2026-08-23 ─────────────────────
+
+
+def _write_master_csvs(tmp_path):
+    import csv as _csv
+
+    cat_csv = tmp_path / "category_master.csv"
+    kw_csv = tmp_path / "keyword_dictionary.csv"
+    with open(cat_csv, "w", encoding="utf-8", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["Market", "Cat_ID", "Cat_Name", "Parent_ID", "Level", "Full_Path"])
+        w.writerows(
+            [
+                ["옥션2.0", "C0001", "패션잡화", "ROOT", "1", "패션잡화"],
+                ["옥션2.0", "C0002", "남성 모자", "C0001", "2", "패션잡화 > 남성 모자"],
+                ["옥션2.0", "C0003", "비니", "C0002", "3", "패션잡화 > 남성 모자 > 비니"],
+            ]
+        )
+    with open(kw_csv, "w", encoding="utf-8", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(
+            ["Keyword_ID", "Search_Keyword", "Target_Cat_ID", "Mapping_Type", "Priority", "Market", "Mapping_Result"]
+        )
+        w.writerows(
+            [
+                ["K0001", "비니", "C0003", "EX(완전일치)", "1", "옥션2.0", "패션잡화 > 남성 모자 > 비니"],
+            ]
+        )
+    return cat_csv, kw_csv
+
+
+def test_build_master_db_loads_from_csv(tmp_path, monkeypatch):
+    import category_master_db
+
+    cat_csv, kw_csv = _write_master_csvs(tmp_path)
+    monkeypatch.setattr(category_master_db, "DEFAULT_CATEGORY_CSV", cat_csv)
+    monkeypatch.setattr(category_master_db, "DEFAULT_KEYWORD_CSV", kw_csv)
+    monkeypatch.setattr(category_master_db, "DEFAULT_JSON_CACHE", tmp_path / "cache.json")
+
+    db = mc.build_master_db(refresh=True)
+    assert len(db.categories) == 3
+    assert len(db.keywords) == 1
+
+
+def test_best_category_via_master_uses_master_db_first(tmp_path, monkeypatch):
+    import category_master_db
+
+    cat_csv, kw_csv = _write_master_csvs(tmp_path)
+    monkeypatch.setattr(category_master_db, "DEFAULT_CATEGORY_CSV", cat_csv)
+    monkeypatch.setattr(category_master_db, "DEFAULT_KEYWORD_CSV", kw_csv)
+    monkeypatch.setattr(category_master_db, "DEFAULT_JSON_CACHE", tmp_path / "cache.json")
+
+    db = mc.build_master_db(refresh=True)
+    cat, step = mc.best_category_via_master("아름트리-무신사-남성-모자-비니", "옥션2.0", db)
+    assert cat == "패션잡화 > 남성 모자 > 비니"
+    assert step.startswith("1)")
+
+
+def test_best_category_via_master_excludes_opposite_gender():
+    import category_master_db as cmdb
+
+    db = cmdb.MasterDB()
+    db.categories["C1"] = cmdb.CategoryNode("C1", "여성모자", "ROOT", 1, "여성모자 > 비니", "테스트마켓")
+    db._children["C1"] = []
+    db._children.setdefault("ROOT", []).append("C1")
+    db._by_market.setdefault("테스트마켓", []).append("C1")
+    db.keywords.append(cmdb.KeywordEntry("K1", "비니", "C1", "EX(완전일치)", 1, "테스트마켓", "여성모자 > 비니"))
+    db._keyword_index[("테스트마켓", "비니")] = [db.keywords[0]]
+
+    cat, step = mc.best_category_via_master("아름트리-무신사-남성-모자-비니", "테스트마켓", db)
+    assert cat == ""
+    assert step == "미검출"
+
+
+def test_best_category_via_master_prefers_class_matching_candidate():
+    """★실사례: "목걸이"(액세서리) 검색이 "목걸이 지갑"(가방 계열)으로
+    새면 안 된다 — 계열이 일치하는 진짜 목걸이가 있으면 그걸 쓴다."""
+    import category_master_db as cmdb
+
+    db = cmdb.MasterDB()
+    db.categories["C1"] = cmdb.CategoryNode("C1", "목걸이 지갑", "P1", 2, "가방/잡화 > 지갑 > 목걸이 지갑", "테스트마켓")
+    db.categories["C2"] = cmdb.CategoryNode("C2", "목걸이", "P2", 2, "쥬얼리/시계 > 목걸이", "테스트마켓")
+    for cid in ("C1", "C2"):
+        db._children[cid] = []
+    db._children.setdefault("P1", []).append("C1")
+    db._children.setdefault("P2", []).append("C2")
+    db._by_market.setdefault("테스트마켓", []).extend(["C1", "C2"])
+    db.keywords.append(cmdb.KeywordEntry("K1", "목걸이", "C1", "MO(형태소분리)", 3, "테스트마켓", ""))
+    db.keywords.append(cmdb.KeywordEntry("K2", "목걸이", "C2", "EX(완전일치)", 1, "테스트마켓", ""))
+    db._keyword_index[("테스트마켓", "목걸이")] = [db.keywords[1], db.keywords[0]]  # EX 먼저
+
+    cat, step = mc.best_category_via_master("아름트리-무신사-남성-악세서리-목걸이", "테스트마켓", db)
+    assert cat == "쥬얼리/시계 > 목걸이"
+
+
+def test_best_category_via_master_falls_back_to_class_mismatch_when_nothing_else():
+    """계열이 일치하는 후보가 전혀 없으면(성별·브랜드는 지키는 한) 그거라도 쓴다."""
+    import category_master_db as cmdb
+
+    db = cmdb.MasterDB()
+    db.categories["C1"] = cmdb.CategoryNode("C1", "목걸이 지갑", "P1", 2, "가방/잡화 > 지갑 > 목걸이 지갑", "테스트마켓")
+    db._children["C1"] = []
+    db._children.setdefault("P1", []).append("C1")
+    db._by_market.setdefault("테스트마켓", []).append("C1")
+    db.keywords.append(cmdb.KeywordEntry("K1", "목걸이", "C1", "EX(완전일치)", 1, "테스트마켓", ""))
+    db._keyword_index[("테스트마켓", "목걸이")] = [db.keywords[0]]
+
+    cat, step = mc.best_category_via_master("아름트리-무신사-남성-악세서리-목걸이", "테스트마켓", db)
+    assert cat == "가방/잡화 > 지갑 > 목걸이 지갑"
+
+
+def test_best_category_via_master_never_returns_opposite_gender_even_as_last_resort():
+    """★요건(절대): 성별은 "미검출 금지" 보다 우선한다 — 반대 성별만
+    있으면 미검출로 두고, `_map_once` 가 기존 캐스케이드로 넘어가게 한다."""
+    import category_master_db as cmdb
+
+    db = cmdb.MasterDB()
+    db.categories["C1"] = cmdb.CategoryNode("C1", "여성모자", "ROOT", 1, "여성모자 > 비니", "테스트마켓")
+    db._children["C1"] = []
+    db._children.setdefault("ROOT", []).append("C1")
+    db._by_market.setdefault("테스트마켓", []).append("C1")
+    db.keywords.append(cmdb.KeywordEntry("K1", "비니", "C1", "EX(완전일치)", 1, "테스트마켓", "여성모자 > 비니"))
+    db._keyword_index[("테스트마켓", "비니")] = [db.keywords[0]]
+
+    cat, step = mc.best_category_via_master("아름트리-무신사-남성-모자-비니", "테스트마켓", db)
+    assert cat == ""
+    assert step == "미검출"
+
+
+def test_map_one_market_prefers_master_db_over_old_cascade(monkeypatch):
+    """★요건: 마스터DB(CSV)가 1순위 — 확실한 매칭이면 기존 matching.py
+    캐스케이드(구 best_category_with_step) 는 호출되지 않아야 한다."""
+    import category_master_db as cmdb
+
+    db = cmdb.MasterDB()
+    db.categories["C1"] = cmdb.CategoryNode("C1", "비니", "P1", 2, "패션잡화 > 모자 > 비니", "옥션2.0")
+    db._children["C1"] = []
+    db._children.setdefault("P1", []).append("C1")
+    db._by_market.setdefault("옥션2.0", []).append("C1")
+    db.keywords.append(cmdb.KeywordEntry("K1", "비니", "C1", "EX(완전일치)", 1, "옥션2.0", "패션잡화 > 모자 > 비니"))
+    db._keyword_index[("옥션2.0", "비니")] = [db.keywords[0]]
+
+    called = {"old_cascade": False}
+
+    def fake_best_category_with_step(*a, **k):
+        called["old_cascade"] = True
+        return "", "미검출"
+
+    monkeypatch.setattr(mc, "best_category_with_step", fake_best_category_with_step)
+
+    popup = FakePopup(["패션잡화 > 모자 > 비니"])
+    item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-모자-비니", AUCTION, master_db=db)
+    assert item.ok is True
+    assert called["old_cascade"] is False
 
 
 def test_market_input_ids_match_screenshots():

@@ -963,6 +963,22 @@ def test_matches_canonical_group_helper():
     assert mt._matches_canonical_group("여성의류 > 셔츠 > 체크셔츠", parsed) is False
 
 
+def test_gender_words_recognize_child_boy_girl_terms():
+    """★실사례: "여성-신발-구두" 검색이 "남아구두"(남자아이)로 새던 사고 —
+    "남아"·"여아"도 반대 성별 판정에 쓰여야 한다."""
+    assert mt.gender_of("남아구두") == "남성"
+    assert mt.gender_of("여아구두") == "여성"
+    assert mt.violates_gender("유아동신발 > 남아구두", "아름트리-무신사-여성-신발-구두") is True
+    assert mt.violates_gender("유아동신발 > 여아구두", "아름트리-무신사-여성-신발-구두") is False
+
+
+def test_non_product_hint_checks_whole_path_not_just_leaf():
+    """★실사례: "건강/의료용품 > 실버용품 > 휠체어 악세서리" 처럼 "건강"이
+    리프가 아니라 최상위에만 있어도 비제품으로 잡아야 한다."""
+    assert mt._is_non_product_hint("건강/의료용품 > 실버용품 > 휠체어 악세서리") is True
+    assert mt._is_non_product_hint("쥬얼리/시계 > 남성용쥬얼리 > 목걸이") is False
+
+
 def test_path_class_ignores_top_level_compound_bucket_name():
     """★실사례(2026-08-23): "의류/언더웨어 > 남성언더웨어 > 드로즈/트렁크"
     가 최상위 "의류/언더웨어"의 "의류" 글자 때문에 "의류" 계열로 잘못
