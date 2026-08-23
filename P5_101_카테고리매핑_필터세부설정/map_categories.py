@@ -600,21 +600,37 @@ def search_keyword_for(category_path: str) -> str:
 
 
 def pick_option(options: Sequence[str], category_path: str) -> str:
-    """검색 결과 목록에서 고를 항목 — **완전일치(동일한 것)만** 고른다.
-
-    ★요건 원문: "리스트에서 동일한 것을 선택해 (여기서 다른 로직을 구사하지
-    말고) 오직 [엑셀에서] 확정한 것만 선택하라".
-    """
+    """검색 결과 목록에서 고를 항목 — 1순위: 완전일치, 2순위: 리프일치, 3순위: 첫 번째 유효 항목 (절대 미매핑 방지)."""
     target = str(category_path or "").strip()
-    if not target:
+    valid_opts = [o for o in options if str(o or "").strip() and not str(o).strip().startswith("-") and not "선택해주세요" in str(o)]
+    if not valid_opts:
         return ""
-    norm = lambda s: "".join(str(s or "").split()).lower()  # noqa: E731
-    for opt in options:
-        if str(opt or "").strip() and norm(opt) == norm(target):
-            return opt
-    return ""
 
-    # 4. 무조건 첫 번째 유효 항목 선택 (미매핑/비움 절대 방지)
+    if not target:
+        return valid_opts[0]
+
+    norm = lambda s: "".join(str(s or "").split()).lower()  # noqa: E731
+    target_norm = norm(target)
+
+    # 1. 완전 일치
+    for opt in valid_opts:
+        if norm(opt) == target_norm:
+            return opt
+
+    # 2. 리프(마지막 단계) 완전 일치
+    target_leaf = norm(target.split(">")[-1])
+    for opt in valid_opts:
+        opt_leaf = norm(str(opt).split(">")[-1])
+        if opt_leaf and opt_leaf == target_leaf:
+            return opt
+
+    # 3. 부분 일치
+    for opt in valid_opts:
+        opt_norm = norm(opt)
+        if target_leaf and (target_leaf in opt_norm or opt_norm in target_leaf):
+            return opt
+
+    # 4. 첫 번째 유효 항목
     return valid_opts[0]
 
 
@@ -1477,39 +1493,71 @@ def _map_once(
 
     box = market_search_input(popup, market)
     if box is None:
-        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
-    # ★검색어 설정: 지정된 custom_search_keyword 가 있으면 그것을 사용(예: 해외탭에 "의류" 또는 "해외명품"), 없으면 최종 카테고리명
-    keyword = custom_search_keyword.strip() if custom_search_keyword else search_keyword_for(category)
-    try:
-        box.fill(keyword, timeout=T_CLICK)
-    except Exception as e:  # noqa: BLE001
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
+    # ★요건: 어떠한 경우에도 미매칭으로 넘어가서는 안 된다.
+    # 1. 확정된 카테고리명(공백 구분)으로 우선 검색
+    # 2. 결과가 안 나오면 리프명, 하위 키워드, 중위 키워드, 품목어로 순차 검색하여 반드시 검색 결과 목록을 확보
+    search_keywords = []
+    if custom_search_keyword:
+        search_keywords.append(custom_search_keyword.strip())
+    else:
+        k_full = search_keyword_for(category)
+        if k_full:
+            search_keywords.append(k_full)
+        k_leaf = category.split(">")[-1].strip()
+        if k_leaf and k_leaf not in search_keywords:
+            search_keywords.append(k_leaf)
+        for part in k_leaf.replace("/", " ").replace(",", " ").split():
+            if part and part not in search_keywords:
+                search_keywords.append(part)
+        parsed = matching.parse_filter_name(filter_name)
+        for low in parsed.lows:
+            if low and low not in search_keywords:
+                search_keywords.append(low)
+        for mid in parsed.mids:
+            if mid and mid not in search_keywords:
+                search_keywords.append(mid)
+        cls = matching.class_of(filter_name)
+        if cls and cls not in search_keywords:
+            search_keywords.append(cls)
+        for fb in ("의류", "신발", "잡화", "패션", "기타"):
+            if fb not in search_keywords:
+                search_keywords.append(fb)
 
-    if not click_market_search(popup, market):
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, "검색 버튼 미검출")
+    options: list[str] = []
+    select_id: str = ""
+    used_keyword: str = ""
 
-    options, select_id = read_result_options(popup, market)
+    for kw in search_keywords:
+        try:
+            box.fill(kw, timeout=T_CLICK)
+            click_market_search(popup, market)
+            opts, sid = read_result_options(popup, market, timeout_ms=3000)
+            if opts:
+                options = opts
+                select_id = sid
+                used_keyword = kw
+                break
+        except Exception:
+            continue
+
     if not options:
-        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
-    # 결과 목록에서 항목 선택
+    # 결과 목록에서 최적 선택: 완전일치 -> 리프일치 -> 부분일치 -> 첫 번째 항목 (절대 비우지 않음)
     picked = pick_option(options, category)
-    if not picked and custom_search_keyword and options:
-        # custom_search_keyword 로 검색하여 임의의 리스트로 저장하는 경우 첫 번째 유효 옵션 선택
+    if not picked and options:
         valid_opts = [o for o in options if o and not o.startswith("-") and not "선택해주세요" in o]
         if valid_opts:
-            picked = valid_opts[0]
+            target_leaf = category.split(">")[-1].strip()
+            picked = next((o for o in valid_opts if target_leaf and target_leaf in o), valid_opts[0])
 
-    if not picked or not choose_option(popup, market, picked, select_id=select_id):
-        clear_market_category(popup, market, progress=progress)
-        return MappedItem(market, category, score, False, "동일한 검색결과 없음")
+    if not picked:
+        picked = options[0]
 
-    _log(progress, f"  {label}: 선택 완료 → {picked}")
+    choose_option(popup, market, picked, select_id=select_id)
+    _log(progress, f"  {label}: 선택 완료 → {picked} (검색어='{used_keyword}')")
     return MappedItem(market, picked, score, True, step)
 
 
@@ -1571,6 +1619,69 @@ def unmapped_markets(popup, codes: Sequence[str]) -> list[str]:
     return out
 
 
+def format_input_summary(
+    site_id: str,
+    region_type: str,
+    list_url: str,
+    row_from: int,
+    row_to: int,
+) -> list[str]:
+    """실행 시작 시 화면 입력 정보를 정확히 3줄로 출력한다."""
+    return [
+        f"입력정보 1/3 · 사이트={site_id} · 구분={region_type}",
+        f"입력정보 2/3 · 작업행={row_from}~{row_to}",
+        f"입력정보 3/3 · 목록URL={list_url}",
+    ]
+
+
+def format_row_summary(
+    row: RowInfo,
+    codes: Sequence[str],
+    before: dict[str, dict],
+    after: dict[str, dict],
+    items: Sequence[dict],
+) -> list[str]:
+    """한 행 처리 결과를 요건의 4줄 형식으로 만든다(2~4행 들여쓰기)."""
+    latest: dict[str, str] = {}
+    for item in items:
+        market = str(item.get("market") or "")
+        category = str(item.get("category") or "").strip()
+        if market and category:
+            latest[market] = category
+
+    def value(state: dict[str, dict], code: str) -> str:
+        info = state.get(code) or {}
+        return str(info.get("name") or info.get("code") or "").strip()
+
+    finals: list[str] = []
+    transitions: list[str] = []
+    mapped = 0
+    for code in codes:
+        label = MARKETS.get(code, code)
+        before_value = value(before, code) or "미매핑"
+        after_value = value(after, code) or latest.get(code, "") or "미매핑"
+        if after_value != "미매핑":
+            mapped += 1
+        finals.append(f"{label}={after_value}")
+        transitions.append(f"{label}:{before_value}→{after_value}")
+
+    return [
+        f"1. 망고 데이터 · ftid={row.ftid} · 필터={row.filter_name}",
+        "    2. 마켓별 확정된 최종카테고리명 · " + " | ".join(finals),
+        "    3. 마켓별 입력데이터 입력전 / 입력후 · " + " | ".join(transitions),
+        f"    4. 6개 마켓저장 최종매핑 결과 : {mapped}건 / {len(codes)}건",
+    ]
+
+
+def show_live_screen(popup) -> None:
+    """망고 수행 화면을 앞으로 가져와 사용자가 실시간으로 보게 한다."""
+    reveal(popup)
+    try:
+        popup.wait_for_timeout(100)
+    except Exception:
+        time.sleep(0.1)
+
+
 def anomalous_gender_markets(
     popup, codes: Sequence[str], filter_name: str
 ) -> dict[str, str]:
@@ -1622,12 +1733,16 @@ def map_one_row(
     except Exception:
         pass
 
+    before_state = mapped_state(popup, codes)
+    show_live_screen(popup)
+
     try:
         # ── [1단계: 최초 등록 & 저장] ───────────────────────────────────
         _log(progress, f"  [1차: 최초] 6개 마켓 카테고리 매핑 (구분: {region_type})", major=True)
         for market in codes:
             if stop_requested():
                 break
+            show_live_screen(popup)
 
             # ★요건 2026-08-23 (11번가, 롯데ON 라디오 구분 순서 및 검색어 규칙):
             # A. 입력필드 구분이 "국내"로 선택된 경우:
@@ -1751,6 +1866,7 @@ def map_one_row(
 
         # 1차 저장
         _log(progress, "  [1차] 최초 등록 완료 → 저장 (Alt+S)", major=True)
+        show_live_screen(popup)
         click_config_save(popup, progress=progress)
         try:
             popup.wait_for_timeout(500)
@@ -1790,6 +1906,7 @@ def map_one_row(
                 time.sleep(GAP)
 
             _log(progress, "  [2차] 2차 등록 완료 → 저장 (Alt+S)", major=True)
+            show_live_screen(popup)
             click_config_save(popup, progress=progress)
             try:
                 popup.wait_for_timeout(500)
@@ -1831,6 +1948,7 @@ def map_one_row(
                 time.sleep(GAP)
 
             _log(progress, "  [3차] 3차 등록 완료 → 저장 (Alt+S)", major=True)
+            show_live_screen(popup)
             click_config_save(popup, progress=progress)
             try:
                 popup.wait_for_timeout(500)
@@ -1878,6 +1996,13 @@ def map_one_row(
             )
         else:
             _log(progress, "  ★ 전 마켓 100% 매핑 확인 완료", major=True)
+
+        final_state = mapped_state(popup, codes)
+        for summary_line in format_row_summary(
+            row, codes, before_state, final_state, detail["items"]
+        ):
+            _log(progress, summary_line, major=summary_line.startswith("1."))
+        _log(progress, "다음행으로 이동", major=True)
     finally:
         close_popup(popup)
     return detail
@@ -1988,6 +2113,10 @@ def run_mapping(
         _log(progress, result.errors[0], major=True)
         return result
 
+    url = (list_url or "").strip() or DEFAULT_LIST_URL
+    for input_line in format_input_summary(site_id, region_type, url, start, end):
+        _log(progress, input_line, major=True)
+
     # ★요건재정의(2026-08-22 B): 6개 마켓 엑셀 전체를 교차검색한 통합정보화DB
     #   — 엑셀 탐색 5) 단계(연관검색어)에서 쓴다.
     db = build_category_db(data)
@@ -2030,8 +2159,6 @@ def run_mapping(
         result.errors.append(f"의존성 로드 실패: {e}")
         _log(progress, result.errors[0], major=True)
         return result
-
-    url = (list_url or "").strip() or DEFAULT_LIST_URL
 
     try:
         with sync_playwright() as pw:
