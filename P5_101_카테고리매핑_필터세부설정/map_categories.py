@@ -1619,6 +1619,69 @@ def unmapped_markets(popup, codes: Sequence[str]) -> list[str]:
     return out
 
 
+def format_input_summary(
+    site_id: str,
+    region_type: str,
+    list_url: str,
+    row_from: int,
+    row_to: int,
+) -> list[str]:
+    """실행 시작 시 화면 입력 정보를 정확히 3줄로 출력한다."""
+    return [
+        f"입력정보 1/3 · 사이트={site_id} · 구분={region_type}",
+        f"입력정보 2/3 · 작업행={row_from}~{row_to}",
+        f"입력정보 3/3 · 목록URL={list_url}",
+    ]
+
+
+def format_row_summary(
+    row: RowInfo,
+    codes: Sequence[str],
+    before: dict[str, dict],
+    after: dict[str, dict],
+    items: Sequence[dict],
+) -> list[str]:
+    """한 행 처리 결과를 요건의 4줄 형식으로 만든다(2~4행 들여쓰기)."""
+    latest: dict[str, str] = {}
+    for item in items:
+        market = str(item.get("market") or "")
+        category = str(item.get("category") or "").strip()
+        if market and category:
+            latest[market] = category
+
+    def value(state: dict[str, dict], code: str) -> str:
+        info = state.get(code) or {}
+        return str(info.get("name") or info.get("code") or "").strip()
+
+    finals: list[str] = []
+    transitions: list[str] = []
+    mapped = 0
+    for code in codes:
+        label = MARKETS.get(code, code)
+        before_value = value(before, code) or "미매핑"
+        after_value = value(after, code) or latest.get(code, "") or "미매핑"
+        if after_value != "미매핑":
+            mapped += 1
+        finals.append(f"{label}={after_value}")
+        transitions.append(f"{label}:{before_value}→{after_value}")
+
+    return [
+        f"1. 망고 데이터 · ftid={row.ftid} · 필터={row.filter_name}",
+        "    2. 마켓별 확정된 최종카테고리명 · " + " | ".join(finals),
+        "    3. 마켓별 입력데이터 입력전 / 입력후 · " + " | ".join(transitions),
+        f"    4. 6개 마켓저장 최종매핑 결과 : {mapped}건 / {len(codes)}건",
+    ]
+
+
+def show_live_screen(popup) -> None:
+    """망고 수행 화면을 앞으로 가져와 사용자가 실시간으로 보게 한다."""
+    reveal(popup)
+    try:
+        popup.wait_for_timeout(100)
+    except Exception:
+        time.sleep(0.1)
+
+
 def anomalous_gender_markets(
     popup, codes: Sequence[str], filter_name: str
 ) -> dict[str, str]:
@@ -1670,12 +1733,16 @@ def map_one_row(
     except Exception:
         pass
 
+    before_state = mapped_state(popup, codes)
+    show_live_screen(popup)
+
     try:
         # ── [1단계: 최초 등록 & 저장] ───────────────────────────────────
         _log(progress, f"  [1차: 최초] 6개 마켓 카테고리 매핑 (구분: {region_type})", major=True)
         for market in codes:
             if stop_requested():
                 break
+            show_live_screen(popup)
 
             # ★요건 2026-08-23 (11번가, 롯데ON 라디오 구분 순서 및 검색어 규칙):
             # A. 입력필드 구분이 "국내"로 선택된 경우:
@@ -1799,6 +1866,7 @@ def map_one_row(
 
         # 1차 저장
         _log(progress, "  [1차] 최초 등록 완료 → 저장 (Alt+S)", major=True)
+        show_live_screen(popup)
         click_config_save(popup, progress=progress)
         try:
             popup.wait_for_timeout(500)
@@ -1838,6 +1906,7 @@ def map_one_row(
                 time.sleep(GAP)
 
             _log(progress, "  [2차] 2차 등록 완료 → 저장 (Alt+S)", major=True)
+            show_live_screen(popup)
             click_config_save(popup, progress=progress)
             try:
                 popup.wait_for_timeout(500)
@@ -1879,6 +1948,7 @@ def map_one_row(
                 time.sleep(GAP)
 
             _log(progress, "  [3차] 3차 등록 완료 → 저장 (Alt+S)", major=True)
+            show_live_screen(popup)
             click_config_save(popup, progress=progress)
             try:
                 popup.wait_for_timeout(500)
@@ -1926,6 +1996,13 @@ def map_one_row(
             )
         else:
             _log(progress, "  ★ 전 마켓 100% 매핑 확인 완료", major=True)
+
+        final_state = mapped_state(popup, codes)
+        for summary_line in format_row_summary(
+            row, codes, before_state, final_state, detail["items"]
+        ):
+            _log(progress, summary_line, major=summary_line.startswith("1."))
+        _log(progress, "다음행으로 이동", major=True)
     finally:
         close_popup(popup)
     return detail
@@ -2036,6 +2113,10 @@ def run_mapping(
         _log(progress, result.errors[0], major=True)
         return result
 
+    url = (list_url or "").strip() or DEFAULT_LIST_URL
+    for input_line in format_input_summary(site_id, region_type, url, start, end):
+        _log(progress, input_line, major=True)
+
     # ★요건재정의(2026-08-22 B): 6개 마켓 엑셀 전체를 교차검색한 통합정보화DB
     #   — 엑셀 탐색 5) 단계(연관검색어)에서 쓴다.
     db = build_category_db(data)
@@ -2078,8 +2159,6 @@ def run_mapping(
         result.errors.append(f"의존성 로드 실패: {e}")
         _log(progress, result.errors[0], major=True)
         return result
-
-    url = (list_url or "").strip() or DEFAULT_LIST_URL
 
     try:
         with sync_playwright() as pw:

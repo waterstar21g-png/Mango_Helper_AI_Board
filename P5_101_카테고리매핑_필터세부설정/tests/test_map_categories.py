@@ -1043,6 +1043,29 @@ def test_mapped_state_and_unmapped_detection():
     assert mc.unmapped_markets(popup, codes) == ["COUP"]
 
 
+def test_input_summary_is_exactly_three_lines():
+    lines = mc.format_input_summary("MUSINSA.com", "국내", "https://example/list", 1, 5)
+    assert len(lines) == 3
+    assert "사이트=MUSINSA.com" in lines[0]
+    assert "작업행=1~5" in lines[1]
+    assert "목록URL=https://example/list" in lines[2]
+
+
+def test_row_summary_is_four_lines_and_lines_2_to_4_are_indented():
+    row = mc.RowInfo(index=0, ftid="793", filter_name="여성-의류-원피스")
+    codes = list(mc.MARKETS)
+    before = {code: {"code": "", "name": ""} for code in codes}
+    after = {
+        code: {"code": str(i + 1), "name": f"카테고리{i + 1}"}
+        for i, code in enumerate(codes)
+    }
+    lines = mc.format_row_summary(row, codes, before, after, [])
+    assert len(lines) == 4
+    assert lines[0].startswith("1. 망고 데이터")
+    assert all(line.startswith("    ") for line in lines[1:])
+    assert lines[3].endswith("6건 / 6건")
+
+
 def test_unmapped_markets_empty_when_state_unavailable():
     class Broken:
         def evaluate(self, *a, **k):
