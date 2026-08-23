@@ -169,6 +169,24 @@ GENDER_WORDS = {
     "공용": ("공용", "유니섹스", "남녀"),
     "아동": ("아동", "키즈", "주니어", "베이비"),
 }
+# ★실사례(2026-08-23): 성인용 "여성-신발-구두" 검색이 "유아동신발 >
+# 여아구두"로 새는 사고가 반복됐다. "여아"를 GENDER_WORDS["여성"] 에도
+# 넣어야(반대 성별 "남아" 배제) 하지만, 그러면 "여아"도 "여성"과 같은
+# 성별로 인식돼 성인/아동 구분이 안 된다. 그래서 성별과는 **별도로**
+# "이 카테고리가 아동/유아 대상인가"를 확인하는 축을 둔다 — 필터명이
+# 스스로 아동을 언급하지 않는데 후보가 아동 카테고리면 배제한다.
+CHILD_WORDS = ("아동", "유아동", "유아", "영유아", "키즈", "주니어", "베이비", "남아", "여아")
+
+
+def mentions_child(text: str) -> bool:
+    low = normalize(text)
+    return any(normalize(w) in low for w in CHILD_WORDS if w)
+
+
+def is_child_category(path: str) -> bool:
+    return mentions_child(path)
+
+
 MATERIAL_WORDS = (
     "가죽", "레더", "니트", "데님", "면", "코튼", "울", "린넨", "퍼", "메쉬",
     "고어텍스", "나일론", "폴리", "스웨이드", "캔버스", "실리콘", "메탈",
@@ -428,6 +446,22 @@ def _matches_canonical_group(path: str, parsed: "ParsedFilter") -> bool:
     )
 
 
+# ★"상위:남성-팬츠 > 상위스포츠/팬츠" 처럼, 필터명이 스스로 특정
+# 활동(골프·낚시·스포츠 등)을 언급하지 않았는데 후보가 그 활동
+# 전용 카테고리면(예: "팬츠" 검색인데 "스포츠 > 팬츠"가 걸림) 일반
+# 의류 카테고리보다 후순위로 둔다. 필터명이 그 활동을 직접 언급하면
+# (예: "골프-팬츠") 오히려 그 활동 카테고리를 우대한다.
+ACTIVITY_WORDS = ("골프", "낚시", "스포츠", "등산", "캠핑", "요가", "수영", "자전거", "러닝")
+
+
+def _mentioned_activity(text: str) -> str:
+    norm = normalize(text)
+    for w in ACTIVITY_WORDS:
+        if normalize(w) in norm:
+            return w
+    return ""
+
+
 def priority_rank(path: str, parsed: "ParsedFilter") -> int:
     """값이 클수록 우선 — 동점일 때 최종 선택 순서를 가른다."""
     gender = gender_of(parsed.raw)
@@ -455,6 +489,16 @@ def priority_rank(path: str, parsed: "ParsedFilter") -> int:
             score += 5
     if not any(path_hit(path, w) for w in OVERSEAS_WORDS):
         score += 10  # 국내 > 해외
+    # ★"성별 > 골프/낚시/스포츠", "상위:남성-팬츠 > 상위스포츠/팬츠":
+    #   필터명이 요청하지 않은 활동 전용 카테고리는 일반 카테고리보다
+    #   후순위로 — 단, 필터명이 그 활동을 직접 요청했다면 오히려 우대.
+    filter_activity = _mentioned_activity(parsed.raw)
+    path_activity = _mentioned_activity(path)
+    if path_activity:
+        if filter_activity and filter_activity == path_activity:
+            score += 4
+        elif not filter_activity:
+            score -= 8
     return score
 
 
@@ -594,7 +638,7 @@ SPECIFIC_ITEM_WORDS: dict[str, tuple[str, ...]] = {
 #   (관리용품, 구두 자체가 아님) · "목걸이 지갑"(지갑, 목걸이 아님)
 NON_PRODUCT_HINT_WORDS = (
     "건강", "관리용품", "케어", "클리너", "탈취제", "방수스프레이",
-    "구두약", "염색제", "구두솔", "신발솔",
+    "구두약", "염색제", "구두솔", "신발솔", "구두주걱", "신발주걱",
 )
 
 
@@ -785,6 +829,9 @@ def has_gender(path: str, gender: str) -> bool:
 
 
 OPPOSITE = {"남성": ("여성",), "여성": ("남성",)}
+# ★"성인 vs 아동" 은 성별과는 별개 축이라 여기(OPPOSITE)에 넣지 않는다
+# — `mentions_child`/`is_child_category` 로 독립적으로 처리한다(실사례:
+# "여성-신발-구두" 가 "유아동신발 > 여아구두"로 새는 사고).
 
 
 def opposite_of(gender: str) -> tuple[str, ...]:
@@ -815,20 +862,40 @@ def class_of(text: str) -> str:
     단어 "패딩"과 신발 단어 "신발"을 둘 다 담고 있다) **더 길게(구체적으로)
     일치하는 쪽**을 우선한다 — 짧은 단어가 먼저 매칭됐다고 그게 항상 맞는
     계열은 아니다.
+
+    ★실사례: "정장구두"(하이힐/펌프스/정장구두)는 "정장"(의류 수식어)이
+    "구두"(신발, 실제 품목)보다 앞에 와서, 단순 "가장 먼저 걸리는 단어"
+    규칙으로는 통째로 "의류"로 오분류됐다 — 신발 계열 검색("구두")이
+    자기 계열 후보를 걸러버리는 사고로 이어졌다. 한국어 복합어는 수식어
+    +머리명사 순서라 뒤쪽이 실제 품목인 경우가 흔하다: 두 계열 단어가
+    빈틈없이 바로 이어 붙어 있으면(복합어) 앞쪽 수식어가 아니라 뒤쪽
+    (머리명사)을 계열로 삼는다.
     """
     low = normalize(text)
     if not low:
         return ""
-    best, best_key = "", (10**6, 0)
+    matches: list[tuple[int, int, str]] = []
     for cls, pairs in _CLASS_WORDS_NORM.items():
         for nw, nlen in pairs:
-            pos = low.find(nw)
-            if pos < 0:
-                continue
-            key = (pos, -nlen)
-            if key < best_key:
-                best, best_key = cls, key
-    return best
+            start = 0
+            while True:
+                pos = low.find(nw, start)
+                if pos < 0:
+                    break
+                matches.append((pos, pos + nlen, cls))
+                start = pos + 1
+    if not matches:
+        return ""
+    matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
+    best = matches[0]
+    for m in matches[1:]:
+        if m[0] == best[1] and m[2] != best[2]:
+            best = m  # 바로 이어 붙은 복합어 — 뒤쪽(머리명사) 계열을 취한다
+        elif m[0] < best[1]:
+            continue  # 겹치는 매치는 무시
+        else:
+            break
+    return best[2]
 
 
 def path_class(path: str) -> str:
@@ -1018,6 +1085,7 @@ def find_category(
     force: bool = True,
     db=None,
     keyword_db=None,
+    ext_db=None,
 ) -> tuple[str, str]:
     """최적("최종") 카테고리와 그 근거 단계 — 요건재정의(2026-08-22) D 항 그대로.
 
@@ -1042,8 +1110,9 @@ def find_category(
     5) 단계에서 연관검색어를 찾는 데 쓴다(없으면 5) 단계는 건너뛴다).
     `keyword_db` 는 `keyword_dictionary.KeywordDB`("최신성 우선" 원칙에
     따라 연관검색어DB의 공식 기준) — 같은 5) 단계에서 `resolve()` 로
-    검색어를 카테고리명으로 확정해 확장 후보에 더한다. 둘 다 없어도
-    (기본값) 이전처럼 동작한다(하위호환).
+    검색어를 카테고리명으로 확정해 확장 후보에 더한다.
+    `ext_db` 는 `extended_master_db.ExtendedMasterDB`(표준 확장형DB) —
+    5) 단계에서 `expand_terms()` 로 범주·범위를 확장한다.
     """
     parsed = parse_filter_name(name)
     skip = {normalize(e) for e in (exclude or []) if str(e or "").strip()}
@@ -1170,6 +1239,14 @@ def find_category(
             if not term or key in tried_db_terms:
                 continue
             tried_db_terms.add(key)
+
+            # 2차: 확장형DB (ext_db) 에서 범주·범위 확장
+            if ext_db is not None:
+                for ext_term in ext_db.expand_terms(term, limit=5):
+                    if ext_term and ext_term not in low_terms and ext_term not in new_low_terms:
+                        new_low_terms.append(ext_term)
+
+            # 3차: 매핑DB (db/keyword_db) 에서 범주·범위 확장
             if db is not None:
                 for related, priority in db.related(term):
                     if priority != 1:
