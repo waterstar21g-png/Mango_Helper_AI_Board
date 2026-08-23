@@ -446,6 +446,22 @@ def _matches_canonical_group(path: str, parsed: "ParsedFilter") -> bool:
     )
 
 
+# ★"상위:남성-팬츠 > 상위스포츠/팬츠" 처럼, 필터명이 스스로 특정
+# 활동(골프·낚시·스포츠 등)을 언급하지 않았는데 후보가 그 활동
+# 전용 카테고리면(예: "팬츠" 검색인데 "스포츠 > 팬츠"가 걸림) 일반
+# 의류 카테고리보다 후순위로 둔다. 필터명이 그 활동을 직접 언급하면
+# (예: "골프-팬츠") 오히려 그 활동 카테고리를 우대한다.
+ACTIVITY_WORDS = ("골프", "낚시", "스포츠", "등산", "캠핑", "요가", "수영", "자전거", "러닝")
+
+
+def _mentioned_activity(text: str) -> str:
+    norm = normalize(text)
+    for w in ACTIVITY_WORDS:
+        if normalize(w) in norm:
+            return w
+    return ""
+
+
 def priority_rank(path: str, parsed: "ParsedFilter") -> int:
     """값이 클수록 우선 — 동점일 때 최종 선택 순서를 가른다."""
     gender = gender_of(parsed.raw)
@@ -473,6 +489,16 @@ def priority_rank(path: str, parsed: "ParsedFilter") -> int:
             score += 5
     if not any(path_hit(path, w) for w in OVERSEAS_WORDS):
         score += 10  # 국내 > 해외
+    # ★"성별 > 골프/낚시/스포츠", "상위:남성-팬츠 > 상위스포츠/팬츠":
+    #   필터명이 요청하지 않은 활동 전용 카테고리는 일반 카테고리보다
+    #   후순위로 — 단, 필터명이 그 활동을 직접 요청했다면 오히려 우대.
+    filter_activity = _mentioned_activity(parsed.raw)
+    path_activity = _mentioned_activity(path)
+    if path_activity:
+        if filter_activity and filter_activity == path_activity:
+            score += 4
+        elif not filter_activity:
+            score -= 8
     return score
 
 

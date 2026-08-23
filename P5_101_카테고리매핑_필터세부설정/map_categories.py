@@ -370,8 +370,20 @@ def best_category_via_master(
     forced_by_idx: dict[int, tuple[str, str]] = {}
     weak_only: tuple[str, str] | None = None  # 절대규칙은 지키지만 비제품·계열불일치뿐일 때
 
+    # ★CSV 단계(Priority) 순서 — 1)완전일치 > 2)유사어 > 3)형태소분리 >
+    # 1.5)카테고리명 직접포함. "4) 최근접 강제지정"은 forced_fallback 로
+    # 별도 취급.
+    TIER_ORDER = {"1": 0, "2": 1, "3": 2, "1.5": 3}
+
     for idx, term in enumerate(terms):
         term_cls = matching.class_of(term)
+        # ★단계별로 "확실한" 후보를 전부 모아 두고, 같은 단계 안에서는
+        # 요건 9(남성의류>패션의류>패션의류잡화·국내>해외·성별>골프/
+        # 낚시/스포츠·성별 우선순위 등)를 그대로 구현한 `priority_rank`
+        # 로 재정렬한다 — 첫 후보를 그냥 확정해버리면 이 우선순위 규칙이
+        # 전혀 반영되지 않는다(실사례로 지적받음: "완전일치 후보가 여럿
+        # 일 때 그중 어느 걸 고를지"에 요건 9가 전혀 안 쓰이고 있었다).
+        by_tier: dict[str, list[tuple[str, str]]] = {}
         # ★limit을 넉넉히 준다 — 카테고리명 직접포함(1.5단계) 후보 중
         # 앞쪽이 성별·비제품 규칙에 걸려 계속 걸러지면, 진짜 정답이 뒤로
         # 밀려 있어도 좁은 limit 에 잘려 후보 목록에 아예 안 들어오는
@@ -406,8 +418,13 @@ def best_category_via_master(
                 if idx not in forced_by_idx:
                     forced_by_idx[idx] = (path, label)
                 continue
-            if idx not in confident_by_idx:
-                confident_by_idx[idx] = (path, label)
+            tier_key = step.split(")")[0]
+            by_tier.setdefault(tier_key, []).append((path, label))
+
+        for tier_key in sorted(by_tier, key=lambda k: TIER_ORDER.get(k, 99)):
+            candidates = by_tier[tier_key]
+            best = max(candidates, key=lambda pl: matching.priority_rank(pl[0], parsed))
+            confident_by_idx[idx] = best
             break
         if idx == 0 and confident_by_idx.get(0):
             break  # 가장 구체적인 검색어가 이미 확실하면 더 볼 필요 없다
