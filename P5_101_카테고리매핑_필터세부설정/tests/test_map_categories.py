@@ -327,7 +327,7 @@ def test_map_one_market_touches_mango_exactly_once(monkeypatch):
     monkeypatch.setattr(mc, "T_LIST", 100)
     calls: list[str] = []
 
-    def fake_once(popup, market, name, cats, *, variant="", exclude=(), progress=None):
+    def fake_once(popup, market, name, cats, *, variant="", exclude=(), db=None, progress=None):
         cat, _ = mc.best_category_with_step(name, cats, exclude=exclude)
         calls.append(cat)
         return mc.MappedItem(market, cat, 1.0, False, "목록 선택 실패")
@@ -868,7 +868,7 @@ def test_synonym_helps_nearest_pick():
     cats = ["패션잡화 > 남성 > 방한모", "생활 > 주방 > 컵"]
     cat, step = mc.best_category_with_step("아름트리-무신사-남성-모자-바라클라바", cats)
     assert cat == "패션잡화 > 남성 > 방한모"   # 바라클라바 ↔ 방한모 동의어
-    assert step.startswith(("2-2) 하위", "3) 최근접"))
+    assert step.startswith(("2) 하위", "6) 근접매핑"))
 
 
 def test_mapped_category_is_within_excel(monkeypatch):
@@ -901,7 +901,7 @@ def test_map_one_market_blocks_opposite_gender(monkeypatch):
     excel = ["남성패션 > 모자 > 비니", "여성패션 > 모자 > 비니"]
     calls = {"n": 0}
 
-    def fake_best(name, cats, *, exclude=()):
+    def fake_best(name, cats, *, exclude=(), db=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return "남성패션 > 모자 > 비니", "테스트"      # 규칙 위반 값
