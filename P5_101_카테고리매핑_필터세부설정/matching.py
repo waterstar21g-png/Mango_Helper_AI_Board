@@ -433,12 +433,16 @@ def filter_paths(paths: Iterable[str], names: Sequence[str]) -> list[str]:
     return [p for p in paths if any(path_hit(p, n) for n in names)]
 
 
-def specificity(path: str, parsed: ParsedFilter) -> tuple[int, int]:
+def specificity(path: str, parsed: ParsedFilter, *, market: str = "") -> tuple[int, int]:
     """정렬 기준 — (일치한 조각 수, 경로 짧은 순)."""
     hits = 0
     for name in [parsed.top, parsed.mid, *parsed.lows]:
         if name and path_hit(path, name):
             hits += 1
+    # 쿠팡 5단계에서 5단계에 고유 검색어가 없는 경우 길이 페널티(-len(path)) 무력화 (일반 단어 우선권 보호)
+    levels = split_levels(path)
+    if (market in ("COUP", "쿠팡") or not market) and len(levels) >= 5 and not leaf_matches_term(path, parsed):
+        return (hits, 0)
     return (hits, -len(path))
 
 
@@ -454,6 +458,48 @@ OVERSEAS_WORDS: tuple[str, ...] = (
     "해외", "역직구", "해외직구", "해외의류", "해외배송", "해외패션", "해외쇼핑",
     "수입", "수입명품", "병행수입", "직구",
 )
+
+# ★요건 2026-08-23 (쿠팡 5단계 최적 선정):
+# 쿠팡 카테고리 매핑 시 4단계까지 일치하면 5단계는 임의의 한 개, 즉 5단계 단어 중
+# 가장 일반적이고 범주가 넓은 하나("기타", "일반" 등) 또는 선정이 어려운 경우 가장 첫 번째를 선택.
+GENERAL_LEAF_WORDS: tuple[str, ...] = (
+    "기타", "일반", "기본", "베이직", "단품", "세트", "모음",
+    "기타소품", "기타잡화", "기타의류", "기타신발", "기타용품", "전체",
+)
+
+
+def is_general_leaf(leaf_text: str) -> bool:
+    """5단계(리프) 단어가 가장 일반적이고 범주가 넓은 단어인가."""
+    norm = normalize(leaf_text)
+    return any(normalize(w) in norm for w in GENERAL_LEAF_WORDS)
+
+
+def leaf_matches_term(path: str, parsed: "ParsedFilter") -> bool:
+    """경로의 5단계(리프) 카테고리명에 필터명의 하위 검색어가 명백히 포함되어 있는가."""
+    levels = split_levels(path)
+    if len(levels) < 5:
+        return False
+    leaf = levels[-1]
+    leaf_norm = normalize(leaf)
+
+    # 4단계까지의 부모 경로에 이미 등장한 단어(예: "셔츠")를 제외한 5단계 고유 수식어 추출
+    parent_path = " ".join(levels[:-1])
+    parent_norm = normalize(parent_path)
+    for parent_lv in levels[:-1]:
+        p_norm = normalize(parent_lv)
+        if p_norm and len(p_norm) >= 2:
+            leaf_norm = leaf_norm.replace(p_norm, "")
+
+    if leaf_norm and len(leaf_norm) >= 2:
+        return leaf_norm in normalize(parsed.raw)
+
+    for low in parsed.lows:
+        low_norm = normalize(low)
+        if low_norm and len(low_norm) >= 2 and low_norm not in parent_norm:
+            if low_norm in normalize(leaf):
+                return True
+
+    return False
 
 
 def has_overseas(path: str) -> bool:
@@ -513,7 +559,9 @@ def _mentioned_activity(text: str) -> str:
     return ""
 
 
-def priority_rank(path: str, parsed: "ParsedFilter", *, region_type: str = "국내") -> int:
+def priority_rank(
+    path: str, parsed: "ParsedFilter", *, market: str = "", region_type: str = "국내"
+) -> int:
     """값이 클수록 우선 — 동점일 때 최종 선택 순서를 가른다."""
     gender = gender_of(parsed.raw)
     score = 0
@@ -522,11 +570,7 @@ def priority_rank(path: str, parsed: "ParsedFilter", *, region_type: str = "국�
     if gender:
         # 성별 정확 일치가 중성/혼용/공용·무표기보다, 그리고(자동으로)
         # 성별 무관한 활동명(골프·낚시·스포츠 등)만 일치하는 경로보다
-        # 항상 우선한다. ★무표기(성별 글자가 아예 없는 경로)도 명시적
-        # "공용/중성"과 동급으로 본다 — 실제 마켓 데이터는 성별 구분이
-        # 필요 없는 품목(예: "스니커즈")에 성별 표기를 아예 안 붙이는
-        # 경우가 흔한데, 이걸 무표기라고 감점하면 정확한 정식 분류가
-        # 밀리고 반대로 품목이 안 맞는 성별-표기 후보가 이겨버린다.
+        # 항상 우선한다.
         if has_gender(path, gender):
             score += 100
         elif any(normalize(w) in normalize(path) for w in NEUTRAL_GENDER_WORDS) or not gender_of(path):
@@ -551,6 +595,17 @@ def priority_rank(path: str, parsed: "ParsedFilter", *, region_type: str = "국�
         else:
             score -= 500   # 해외 모드에서도 일반/국내 카테고리 우선, 해외는 최후의 수단으로만
 
+    # ★요건 2026-08-23: 쿠팡 카테고리 매핑 시 4단계까지 일치할 때:
+    # 1. 5단계 카테고리명에 명백히 검색어가 있는 경우: 그 카테고리를 최우선 선택 (+50)
+    # 2. 5단계에 검색어가 없는 경우: 가장 일반적이고 범주가 넓은 하나("기타", "일반" 등) 우선 (+15)
+    # 3. 선정이 어려운 경우: 가장 첫 번째 선택 (pick_best의 stable sort로 처리)
+    levels = split_levels(path)
+    if (market in ("COUP", "쿠팡") or not market) and len(levels) >= 5:
+        if leaf_matches_term(path, parsed):
+            score += 50
+        elif is_general_leaf(levels[-1]):
+            score += 15
+
     # ★"성별 > 골프/낚시/스포츠", "상위:남성-팬츠 > 상위스포츠/팬츠":
     #   필터명이 요청하지 않은 활동 전용 카테고리는 일반 카테고리보다
     #   후순위로 — 단, 필터명이 그 활동을 직접 요청했다면 오히려 우대.
@@ -564,14 +619,23 @@ def priority_rank(path: str, parsed: "ParsedFilter", *, region_type: str = "국�
     return score
 
 
-def pick_best(paths: Sequence[str], parsed: ParsedFilter, *, region_type: str = "국내") -> str:
+def pick_best(
+    paths: Sequence[str], parsed: ParsedFilter, *, market: str = "", region_type: str = "국내"
+) -> str:
     if not paths:
         return ""
+    # 4단계까지 일치하는 5단계 후보군이 있을 때 일반적 단어 우선 혹은 첫 번째를 우선하기 위해
+    # 원래 순서(인덱스)를 보존하여 안정적인 정렬(stable sort) 수행
+    indexed = list(enumerate(paths))
     return sorted(
-        paths,
-        key=lambda p: (priority_rank(p, parsed, region_type=region_type), *specificity(p, parsed)),
+        indexed,
+        key=lambda ip: (
+            priority_rank(ip[1], parsed, market=market, region_type=region_type),
+            *specificity(ip[1], parsed, market=market),
+            -ip[0],  # 동점일 때 원래 목록의 앞선 순서(첫 번째) 우선
+        ),
         reverse=True,
-    )[0]
+    )[0][1]
 
 
 def kind_of(parsed: ParsedFilter) -> str:
@@ -1154,6 +1218,7 @@ def find_category(
     *,
     exclude: Sequence[str] = (),
     force: bool = True,
+    market: str = "",
     region_type: str = "국내",
     db=None,
     keyword_db=None,
@@ -1253,26 +1318,28 @@ def find_category(
                 narrowed = filter_paths(low_hits, mid_terms)
             if narrowed:
                 return (
-                    pick_best(narrowed, parsed, region_type=region_type),
+                    pick_best(narrowed, parsed, market=market, region_type=region_type),
                     f"3) 우선순위(상위·중위 일치, {round_no}회차)" + tag,
                 )
             # 국내/해외 → 국내 OK
             domestic = [p for p in low_hits if not any(path_hit(p, w) for w in OVERSEAS_WORDS)]
             if domestic and len(domestic) < len(low_hits):
                 return (
-                    pick_best(domestic, parsed, region_type=region_type),
+                    pick_best(domestic, parsed, market=market, region_type=region_type),
                     f"3) 우선순위(국내, {round_no}회차)" + tag,
                 )
             # 정보화DB 로도 못 좁히면 그 안에서 가장 그럴듯한 것 하나
             return (
-                pick_best(low_hits, parsed, region_type=region_type),
+                pick_best(low_hits, parsed, market=market, region_type=region_type),
                 f"3) 우선순위(정보화DB 조회, {round_no}회차)" + tag,
             )
 
         # 하위 검색 0건 → 요건 D-11: 하위(1차) 없으면 중위(2차)로 전체 재검색
         mid_hits = filter_paths(paths, mid_terms)
-        if mid_hits:
-            return pick_best(mid_hits, parsed, region_type=region_type), f"3) 중위 2차검색({round_no}회차)" + tag
+        if len(mid_hits) == 1:
+            return mid_hits[0], f"3) 중위 2차검색 1건({round_no}회차)" + tag
+        if len(mid_hits) > 1:
+            return pick_best(mid_hits, parsed, market=market, region_type=region_type), f"3) 중위 2차검색({round_no}회차)" + tag
 
         # 4) 포괄성(확장범주) 범위로 찾는다
         kind = kind_of(parsed)
@@ -1280,7 +1347,7 @@ def find_category(
         if generic:
             narrowed = filter_paths(generic, low_terms) or filter_paths(generic, mid_terms)
             target = narrowed or generic
-            return pick_best(target, parsed, region_type=region_type), f"4) 확장범주({kind}, {round_no}회차)" + tag
+            return pick_best(target, parsed, market=market, region_type=region_type), f"4) 확장범주({kind}, {round_no}회차)" + tag
 
         # 5) 정보화DB에서 연관검색어를 찾아 검색어를 확장하고 다음 회차로
         #   ★연관검색어는 보통 리프 전체("야구모자/뉴에라/스냅백")처럼 여러

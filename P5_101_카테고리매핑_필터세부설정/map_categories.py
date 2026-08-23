@@ -407,7 +407,9 @@ def best_category_via_master(
             candidates = by_tier[tier_key]
             best = max(
                 candidates,
-                key=lambda pl: matching.priority_rank(pl[0], parsed, region_type=region_type),
+                key=lambda pl: matching.priority_rank(
+                    pl[0], parsed, market=market_display_name, region_type=region_type
+                ),
             )
             confident_by_idx[idx] = best
             break
@@ -533,6 +535,7 @@ def best_category_with_step(
     categories: Sequence[str],
     *,
     exclude: Sequence[str] = (),
+    market: str = "",
     region_type: str = "국내",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
@@ -543,6 +546,7 @@ def best_category_with_step(
         filter_name,
         list(categories),
         exclude=exclude,
+        market=market,
         region_type=region_type,
         db=db,
         keyword_db=keyword_db,
@@ -1325,6 +1329,7 @@ def _map_once(
             filter_name,
             categories,
             exclude=exclude,
+            market=market,
             region_type=region_type,
             db=db,
             keyword_db=keyword_db,
@@ -1340,6 +1345,7 @@ def _map_once(
             filter_name,
             safe,
             exclude=exclude,
+            market=market,
             region_type=region_type,
             db=db,
             keyword_db=keyword_db,

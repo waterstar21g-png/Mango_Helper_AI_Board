@@ -108,3 +108,45 @@ def test_no_unmapped_forced_fallback_ensured():
     cat, step = mt.find_category("아름트리-무신사-남성-신발-스니커즈", cats)
     assert cat == "패션잡화 > 소품 > 파우치"
     assert "근접매핑" in step or "강제지정" in step
+
+
+def test_coupang_level5_exact_keyword_match_preferred_over_generic():
+    """쿠팡 4단계 일치 시, 5단계에 명백히 검색어가 있는 경우 정확한 카테고리 우선."""
+    cats = [
+        "패션의류잡화 > 남성패션 > 남성상의 > 티셔츠 > 기타",
+        "패션의류잡화 > 남성패션 > 남성상의 > 티셔츠 > 반팔티셔츠",
+        "패션의류잡화 > 남성패션 > 남성상의 > 티셔츠 > 긴팔티셔츠",
+    ]
+    # 필터명이 '반팔티셔츠'를 명시한 경우 -> 5단계 '반팔티셔츠' 우선 매핑
+    cat, step = mt.find_category(
+        "아름트리-무신사-남성-상의-반팔티셔츠", cats, market="COUP"
+    )
+    assert cat == "패션의류잡화 > 남성패션 > 남성상의 > 티셔츠 > 반팔티셔츠"
+
+
+def test_coupang_level5_generic_leaf_chosen_when_no_keyword():
+    """쿠팡 4단계 일치 시, 5단계에 검색어가 없으면 '기타/일반' 등 광범위 단어 우선."""
+    cats = [
+        "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > 슬림핏셔츠",
+        "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > 오버핏셔츠",
+        "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > 기타",
+    ]
+    # 필터명에 슬림핏/오버핏 언급이 없는 경우 -> '기타' 우선
+    cat, step = mt.find_category(
+        "아름트리-무신사-남성-상의-셔츠", cats, market="COUP"
+    )
+    assert cat == "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > 기타"
+
+
+def test_coupang_level5_first_leaf_chosen_when_hard_to_select():
+    """쿠팡 4단계 일치 시, 일반적 단어도 없으면 원래 목록 중 첫 번째 선택."""
+    cats = [
+        "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > A타입",
+        "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > B타입",
+        "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > C타입",
+    ]
+    cat, step = mt.find_category(
+        "아름트리-무신사-남성-상의-셔츠", cats, market="COUP"
+    )
+    assert cat == "패션의류잡화 > 남성패션 > 남성상의 > 셔츠 > A타입"
+
