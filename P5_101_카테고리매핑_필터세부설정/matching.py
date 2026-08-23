@@ -1011,20 +1011,39 @@ def find_category(
             return pick_best(target, parsed), f"4) 확장범주({kind}, {round_no}회차)" + tag
 
         # 5) 정보화DB에서 연관검색어를 찾아 검색어를 확장하고 다음 회차로
+        #   ★연관검색어는 보통 리프 전체("야구모자/뉴에라/스냅백")처럼 여러
+        #   단어가 결합된 형태로 나온다 — 그대로 검색어에 넣으면 너무
+        #   구체적이라 오히려 무관한 후보까지 쓸어담는다. `segment_variants`
+        #   로 낱개 단어로 쪼갠 뒤 **하위(1순위)만** 하위검색에 추가한다.
+        #   중위·상위(2·3순위) 연관어는 일부러 쓰지 않는다 — "모자"·"잡화"
+        #   같은 흔한 말이 섞여 들어오면(예: "남성 모자"를 쪼개면 "모자"가
+        #   나온다) 중위 검색이 도로 무관한 후보를 쓸어담는다. 확장범주(4)
+        #   단계가 이미 그 넓히기 역할을 전담한다.
         if db is None:
             break
-        new_terms: list[str] = []
+        new_low_terms: list[str] = []
         for term in [*low_terms, *mid_terms]:
             key = normalize(term)
             if not term or key in tried_db_terms:
                 continue
             tried_db_terms.add(key)
-            for related in db.related_terms(term):
-                if related not in low_terms and related not in new_terms:
-                    new_terms.append(related)
-        if not new_terms:
+            for related, priority in db.related(term):
+                if priority != 1:
+                    continue
+                # ★단순 토큰화만 쓴다("/" · 공백 구분) — `segment_variants` 의
+                #   반쪽-분해(halves)까지 적용하면 "야구모자"(4자)가 "야구"+
+                #   "모자"로 갈라져, 흔한 말 "모자"가 다시 검색어에 섞여
+                #   무관한 후보까지 쓸어담는다.
+                add_related = related.strip()
+                if add_related and add_related not in low_terms and add_related not in new_low_terms:
+                    new_low_terms.append(add_related)
+                for word in _SPLIT.split(related):
+                    word = word.strip()
+                    if word and word not in low_terms and word not in new_low_terms:
+                        new_low_terms.append(word)
+        if not new_low_terms:
             break
-        low_terms = [*low_terms, *new_terms]
+        low_terms = [*low_terms, *new_low_terms]
 
     # 6) 그래도 없으면 — 망고 필터명과 가장 가까운 카테고리 하나를 반드시 지정
     if force:
