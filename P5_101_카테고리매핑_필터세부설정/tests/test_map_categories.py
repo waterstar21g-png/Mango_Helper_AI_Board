@@ -162,9 +162,81 @@ def test_load_market_excels_reports(tmp_path):
     path = tmp_path / "카테고리분류표_쿠팡_1.xlsx"
     _write_excel(path, [["패션", "모자"]], ["1단계", "2단계"])
     logs: list[str] = []
-    data = mc.load_market_excels({"COUP": path}, progress=logs.append)
+    # ★update_cache=False — 이 테스트는 캐시 갱신을 검증하는 게 아니므로
+    #   실제(커밋된) 캐시 파일을 건드리지 않는다.
+    data = mc.load_market_excels({"COUP": path}, progress=logs.append, update_cache=False)
     assert data["COUP"] == ["패션 > 모자"]
     assert any("쿠팡" in l for l in logs)
+
+
+# ── 캐시(요건 2026-08-23): 엑셀 입력 있으면 그게 최신 → 캐시 갱신, ──
+#    엑셀 입력 없으면 캐시를 최신 자료로 보고 그걸로 매핑 ──────────
+
+
+def test_load_market_excels_updates_cache(tmp_path, monkeypatch):
+    import market_cache
+
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr(market_cache, "DEFAULT_CACHE_PATH", cache_path)
+
+    excel_path = tmp_path / "카테고리분류표_쿠팡_1.xlsx"
+    _write_excel(excel_path, [["패션", "모자"]], ["1단계", "2단계"])
+    mc.load_market_excels({"COUP": excel_path})
+
+    assert cache_path.exists()
+    cached = market_cache.load(cache_path)
+    assert cached["COUP"] == ["패션 > 모자"]
+
+
+def test_load_market_excels_or_cache_prefers_excel_when_given(tmp_path, monkeypatch):
+    """★요건: 입력에 엑셀 파일이 있으면 그걸 최신성으로 간주해 DB(캐시)를 갱신."""
+    import market_cache
+
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr(market_cache, "DEFAULT_CACHE_PATH", cache_path)
+    market_cache.save({"COUP": ["옛날 > 캐시값"]}, cache_path)
+
+    excel_path = tmp_path / "카테고리분류표_쿠팡_1.xlsx"
+    _write_excel(excel_path, [["패션", "새카테고리"]], ["1단계", "2단계"])
+
+    data = mc.load_market_excels_or_cache({"COUP": excel_path})
+    assert data["COUP"] == ["패션 > 새카테고리"]
+    # 캐시도 최신 엑셀 내용으로 갱신되어야 한다
+    assert market_cache.load(cache_path)["COUP"] == ["패션 > 새카테고리"]
+
+
+def test_load_market_excels_or_cache_uses_cache_when_no_excel_given(tmp_path, monkeypatch):
+    """★요건: 입력에 엑셀 파일 지정이 없으면 캐시를 최신 자료로 보고 그걸로 매핑."""
+    import market_cache
+
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr(market_cache, "DEFAULT_CACHE_PATH", cache_path)
+    market_cache.save({"COUP": ["패션 > 저장된카테고리"]}, cache_path)
+
+    data = mc.load_market_excels_or_cache(None)
+    assert data["COUP"] == ["패션 > 저장된카테고리"]
+
+
+def test_load_market_excels_or_cache_falls_back_when_excel_read_fails(tmp_path, monkeypatch):
+    """엑셀 경로를 줬지만 전부 읽기 실패하면(파일 없음 등) 캐시로 대체."""
+    import market_cache
+
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr(market_cache, "DEFAULT_CACHE_PATH", cache_path)
+    market_cache.save({"COUP": ["패션 > 저장된카테고리"]}, cache_path)
+
+    data = mc.load_market_excels_or_cache({"COUP": tmp_path / "존재하지않음.xlsx"})
+    assert data["COUP"] == ["패션 > 저장된카테고리"]
+
+
+def test_load_market_excels_or_cache_empty_when_neither_available(tmp_path, monkeypatch):
+    import market_cache
+
+    cache_path = tmp_path / "cache.json"
+    monkeypatch.setattr(market_cache, "DEFAULT_CACHE_PATH", cache_path)
+
+    data = mc.load_market_excels_or_cache(None)
+    assert data == {}
 
 
 # ── 화면 선택자 (스크린샷 DOM) ────────────────────────────────────

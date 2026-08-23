@@ -52,6 +52,7 @@ for _p in (P2_DIR, P5_DIR):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import matching  # noqa: E402
 import category_db  # noqa: E402
+import market_cache  # noqa: E402
 
 ProgressFn = Callable[[str], None]
 
@@ -246,9 +247,17 @@ def load_categories(path: str | Path) -> list[str]:
 
 
 def load_market_excels(
-    paths: dict[str, str | Path], *, progress: ProgressFn | None = None
+    paths: dict[str, str | Path],
+    *,
+    progress: ProgressFn | None = None,
+    update_cache: bool = True,
 ) -> dict[str, list[str]]:
-    """마켓 코드 → 카테고리 목록."""
+    """마켓 코드 → 카테고리 목록.
+
+    ★요건: 엑셀을 실제로 읽었으면(성공한 마켓이 하나라도 있으면) 그
+    결과를 `market_cache` 에 저장해 둔다 — 다음 실행부터는 엑셀 파일이
+    없어도(또는 다시 열지 않고도) 이 캐시로 재사용할 수 있다.
+    """
     data: dict[str, list[str]] = {}
     for code, path in paths.items():
         code = code.strip().upper()
@@ -261,7 +270,40 @@ def load_market_excels(
             continue
         data[code] = cats
         _log(progress, f"  {MARKETS.get(code, code)} 카테고리 {len(cats)}건 로드", major=True)
+    if data and update_cache:
+        try:
+            cache_path = market_cache.save(data)
+            _log(progress, f"  카테고리 캐시 갱신 → {cache_path}", major=True)
+        except OSError as e:  # noqa: BLE001
+            _log(progress, f"  경고: 카테고리 캐시 저장 실패 · {e}")
     return data
+
+
+def load_market_excels_or_cache(
+    paths: dict[str, str | Path] | None = None,
+    *,
+    progress: ProgressFn | None = None,
+) -> dict[str, list[str]]:
+    """엑셀 경로가 있으면 엑셀에서 읽고(캐시도 갱신), 없으면 캐시에서 읽는다.
+
+    ★요건: "매번 엑셀을 다시 읽지 않고 캐시로 재사용" — 엑셀 파일·경로가
+    준비되지 않은 상태에서도(예: 서버에 엑셀이 없는 환경) 직전에 구축해
+    둔 카테고리 데이터로 계속 동작할 수 있게 한다.
+    """
+    if paths:
+        data = load_market_excels(paths, progress=progress)
+        if data:
+            return data
+    cached = market_cache.load()
+    if cached:
+        _log(
+            progress,
+            f"  엑셀 대신 캐시 사용 — 마켓 {len(cached)}건 · "
+            f"카테고리 {sum(len(v) for v in cached.values())}건 "
+            f"({market_cache.DEFAULT_CACHE_PATH.name})",
+            major=True,
+        )
+    return cached
 
 
 def build_category_db(excels: dict[str, Sequence[str]]) -> category_db.CategoryDB:
@@ -1509,8 +1551,9 @@ def run_mapping(
     start, end = row_range(row_from, row_to)
 
     data = dict(excels or {})
-    if not data and excel_paths:
-        data = load_market_excels(excel_paths, progress=progress)
+    if not data:
+        # ★요건: 엑셀 경로가 없으면(또는 읽기 실패) 캐시로 재사용한다.
+        data = load_market_excels_or_cache(excel_paths, progress=progress)
     if not data:
         result.errors.append("마켓별 카테고리 엑셀이 없습니다.")
         _log(progress, result.errors[0], major=True)
@@ -1682,7 +1725,8 @@ def main(argv: list[str] | None = None) -> int:
         if code and path:
             paths[code.strip().upper()] = path.strip()
 
-    excels = load_market_excels(paths) if paths else {}
+    # ★요건: 엑셀 경로가 없으면 캐시(직전에 구축해 둔 카테고리)로 재사용한다.
+    excels = load_market_excels_or_cache(paths)
 
     if args.dry_run:
         run_dry([n.strip() for n in args.dry_run.split(",") if n.strip()], excels)

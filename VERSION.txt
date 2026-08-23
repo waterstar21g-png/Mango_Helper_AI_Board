@@ -1,3 +1,60 @@
+버전 2.32.0 (Python 보드)
+업데이트: 마켓별 카테고리 JSON 캐시 신설 — 엑셀 없이도 재사용 가능.
+1) 신설 `market_cache.py` — 마켓별 카테고리 경로(엑셀을 읽은 원본 결과)를
+   `data/market_categories_cache.json` 에 저장·로드. 파생 결과(색인·
+   동의어 사전)는 캐시하지 않고 이 원본에서 항상 다시 계산한다(사전이
+   나중에 바뀌어도 캐시가 낡은 값을 주지 않도록).
+2) ★요건: "입력에 엑셀 파일이 있으면 그걸 최신성으로 간주하고 DB를
+   갱신, 없으면 DB(캐시)를 최신 자료로 보고 매핑을 수행" — `load_market_
+   excels()` 가 엑셀을 성공적으로 읽으면 캐시를 자동 갱신하고,
+   `load_market_excels_or_cache()` 가 엑셀 경로가 없거나 읽기 실패하면
+   캐시로 대체한다. `run_mapping`·CLI(`main`) 양쪽에 연결.
+3) 실제 6개 마켓 엑셀(14,882개 카테고리 경로, 964KB)로 캐시를 구축해
+   `data/market_categories_cache.json` 으로 GitHub에 커밋 — 다음부터는
+   엑셀 파일이 없어도 이 캐시로 매핑 작업을 계속할 수 있다.
+
+버전 2.31.0 (Python 보드)
+업데이트: 연관검색어DB — 범위 한정(scoped) 대체 + "반드시 하나" 강제지정.
+1) 요건: "연관검색어DB 구축 관련 요건 반영 우선순위는 최신성을 최우선으로
+   할 것" — `category_db.py`(교차색인)와 `keyword_dictionary.py`(ERD)가
+   충돌하면 더 최근에 만든 `keyword_dictionary.py` 를 공식 기준으로 삼는다.
+2) 신설 `substitute_for(cat_id, available_cat_ids=…)` — 특정 카테고리
+   하나가 "이 마켓엔 없다"고 가정하고, 그 카테고리만 기준으로 형제(3단계)
+   → 조상(4단계, 조상 자신이 없으면 그 하위트리/사촌까지) 순으로만 대체를
+   찾는 **범위 한정** 조회. 기존 `resolve()`(전역 조회)에서는 RE(형제)가
+   항상 SY 뒤에 가려 실제로 선택되지 않던 한계를 해결한다.
+3) ★요건(절대): "형제·상위까지 없다고 미검출로 끝내는 건 이 DB를 만든
+   목적에 위배된다" — 5) 최근접 강제지정 단계를 추가해, `available_cat_ids`
+   에 카테고리가 하나라도 있으면 그 범위 전체에서 이름이 가장 비슷한
+   것을 반드시 하나 확정한다. `None` 은 그 범위 자체가 완전히 빈 목록일
+   때만 나오고, 이때도 "미검출"이 아니라 "카테고리 자료 없음"으로 구분한다.
+4) `resolve_with_fallback(keyword, available_cat_ids=…)` — 1)완전일치→
+   2)유사어→[대상이 범위 밖이면] 3)형제→4)조상→5)최근접강제지정 전체
+   흐름을 하나로 묶은 진입점. 요건 원문의 "캡모자 → M112 → 형제 → 상위"
+   시나리오를 그대로 재현·검증.
+5) `matching.py` — `find_category` 5)단계(정보화DB) 검색어 확장 정밀화.
+   연관검색어를 그대로 넣으면(예: "야구모자/뉴에라/스냅백") `level_hit`
+   의 양방향 부분일치 때문에 흔한 말("모자")이 다시 섞여 무관한 후보까지
+   쓸어담는 문제를 발견 — 1순위(하위) 연관어만, 반쪽분해(halves) 없는
+   단순 토큰화로 한정해 확장하도록 좁혔다.
+
+버전 2.30.0 (Python 보드)
+업데이트: 연관검색어DB(CATEGORY_MASTER + KEYWORD_DICTIONARY) 신설.
+1) 신설 `keyword_dictionary.py` — 제시된 ERD(카테고리 마스터·키워드 매핑
+   사전) 그대로 구현. `CATEGORY_MASTER(Cat_ID·Cat_Name·Parent_ID·Level·
+   Full_Path)` + `KEYWORD_DICTIONARY(Keyword_ID·Search_Keyword·
+   Target_Cat_ID·Mapping_Type·Priority)`.
+2) 리프마다 SY(동의어)·MO(형태소분리, 성별 접두어 양방향 결합)·
+   RE(동일범주/형제어)·EX(확대범주/상위어)를 자동 생성. 기존
+   `matching.ITEM_SYNONYMS` 사전도 SY 로 병합.
+3) `resolve()` — 요건 4단계 폭포수(완전일치→유사어→동일범주→확대범주)로
+   검색어 하나를 카테고리로 확정.
+4) 스크린샷 샘플(계층형 카테고리 87건)로 실제 구축 — CATEGORY_MASTER
+   115건 · KEYWORD_DICTIONARY 약 980건, 요건 예시(캡모자·뉴에라·무스탕·
+   로퍼·정장바지) 전부 재현 확인.
+5) `category_db.py`(마켓 교차색인)와 보완 관계 — 필요시 `find_category`
+   5) 단계에 함께 연결 가능.
+
 버전 2.29.0 (Python 보드)
 업데이트: 카테고리 매칭 요건 전면 재정의 — 통합정보화DB 신설 + 탐색순서 재작성.
 1) 신설 `category_db.py` — 6개 마켓 엑셀을 하위·중위·상위 단계로 교차색인해
