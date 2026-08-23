@@ -58,12 +58,11 @@ def test_stop_flag_is_gitignored():
 
 
 def test_input_history_wired_for_site_and_url():
-    """사이트명·작업 URL 을 리스트박스(콤보박스)로 고를 수 있고, 선택 시 즉시 조회한다."""
+    """사이트명·작업 URL 을 리스트박스(콤보박스)로 고를 수 있고, 이력이 저장된다."""
     text = (ROOT / "board" / "app.py").read_text(encoding="utf-8")
     for needed in (
         "self.cbo_p3rst_site",
         "self.cbo_p3rst_url",
-        "self._on_p3rst_input_picked",
         "self._remember_p3rst_inputs",
         "P3RST_SITE_HISTORY",
         "P3RST_URL_HISTORY",

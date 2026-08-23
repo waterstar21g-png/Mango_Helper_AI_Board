@@ -9,12 +9,11 @@ FOLDER = "P5_101_카테고리매핑_필터세부설정"
 
 
 def test_input_history_wired_for_site_and_url():
-    """사이트명·목록 URL 을 리스트박스(콤보박스)로 고를 수 있고, 선택 시 즉시 조회한다."""
+    """사이트명·목록 URL 을 리스트박스(콤보박스)로 고를 수 있고, 이력이 저장된다."""
     text = (ROOT / "board" / "app.py").read_text(encoding="utf-8")
     for needed in (
         "self.cbo_p5m_site",
         "self.cbo_p5m_url",
-        "self._on_p5m_input_picked",
         "self._remember_p5m_inputs",
         "P5M_SITE_HISTORY",
         "P5M_URL_HISTORY",

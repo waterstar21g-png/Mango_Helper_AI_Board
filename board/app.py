@@ -1485,9 +1485,6 @@ class BoardApp(tk.Tk):
             values=ih.load(P5M_SITE_HISTORY),
         )
         self.cbo_p5m_site.pack(side="left")
-        self.cbo_p5m_site.bind(
-            "<<ComboboxSelected>>", lambda e: self._on_p5m_input_picked()
-        )
 
         # ★요건 2: 사이트명 우측에 "국내 / 해외 구분" 입력필드(라디오버튼)
         tk.Label(r0, text="구분", width=5, anchor="e", bg="#ffffff", font=("Malgun Gothic", 9, "bold")).pack(side="left", padx=(8, 2))
@@ -1569,9 +1566,6 @@ class BoardApp(tk.Tk):
             r2, textvariable=self.var_p5m_url, values=ih.load(P5M_URL_HISTORY)
         )
         self.cbo_p5m_url.pack(side="left", fill="x", expand=True)
-        self.cbo_p5m_url.bind(
-            "<<ComboboxSelected>>", lambda e: self._on_p5m_input_picked()
-        )
         tk.Label(
             r2,
             text="필수",
@@ -1666,11 +1660,6 @@ class BoardApp(tk.Tk):
         if missing:
             text += f"   (없음: {' · '.join(missing)})"
         self.lbl_p5m_excels.configure(text=text, fg="#15803d" if not missing else "#b45309")
-
-    def _on_p5m_input_picked(self) -> None:
-        """사이트명·목록 URL 리스트박스에서 값을 고르면 즉시 망고 목록을 조회한다."""
-        if self.var_p5m_url.get().strip():
-            self._check_p5m_rows()
 
     def _remember_p5m_inputs(self) -> None:
         site = self.var_p5m_site.get().strip()
@@ -3873,9 +3862,6 @@ class BoardApp(tk.Tk):
             values=ih.load(P3RST_SITE_HISTORY),
         )
         self.cbo_p3rst_site.pack(side="left")
-        self.cbo_p3rst_site.bind(
-            "<<ComboboxSelected>>", lambda e: self._on_p3rst_input_picked()
-        )
         tk.Label(
             r0,
             text="(비우면 현재 선택 유지)",
@@ -3895,9 +3881,6 @@ class BoardApp(tk.Tk):
             r1, textvariable=self.var_p3rst_url, values=ih.load(P3RST_URL_HISTORY)
         )
         self.cbo_p3rst_url.pack(side="left", fill="x", expand=True)
-        self.cbo_p3rst_url.bind(
-            "<<ComboboxSelected>>", lambda e: self._on_p3rst_input_picked()
-        )
         tk.Label(
             r1,
             text="필수",
@@ -4022,11 +4005,6 @@ class BoardApp(tk.Tk):
         row_to = self.var_p3rst_to.get().strip() or str(p3_reset_mapping.DEFAULT_ROW_TO)
         args.extend(["--row-from", row_from, "--row-to", row_to])
         return args
-
-    def _on_p3rst_input_picked(self) -> None:
-        """사이트명·작업 URL 리스트박스에서 값을 고르면 즉시 망고 목록을 조회한다."""
-        if self.var_p3rst_url.get().strip():
-            self._check_p3rst_rows()
 
     def _remember_p3rst_inputs(self) -> None:
         site = self.var_p3rst_site.get().strip()
