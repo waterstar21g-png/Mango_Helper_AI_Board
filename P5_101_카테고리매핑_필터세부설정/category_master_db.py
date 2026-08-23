@@ -227,13 +227,25 @@ class MasterDB:
         return candidate_ids[0] if candidate_ids else None
 
     def _similar_candidates(
-        self, name: str, candidate_ids: Sequence[str], *, exclude: Sequence[str] = (), limit: int = 5
+        self,
+        name: str,
+        candidate_ids: Sequence[str],
+        *,
+        exclude: Sequence[str] = (),
+        limit: int = 5,
+        gender: str = "",
     ) -> list[str]:
         """이름 유사도로 순위를 매긴다. `matching` 이 있으면 검색어의
         계열(신발·의류 등)과 같은 계열 후보를 먼저 보고, 없으면 마켓
         전체를 본다 — 순수 글자(bigram) 유사도만으로는 "드로즈"가
         "퀵드로"(등산용품) 처럼 전혀 무관한 계열과 우연히 겹쳐 엉뚱한
         걸 고르는 사고가 나기 때문이다.
+
+        ★실사례: 글자 겹침이 전부 0점으로 동률일 때(예: "구두" vs 이름이
+        전혀 안 겹치는 "신발"(대분류, 짧음) vs "여성단화"(같은 성별 명시,
+        조금 더 길음)) 예전엔 "경로가 짧을수록" 이겨서 성별 표기조차 없는
+        밋밋한 대분류가 이겼다. `gender` 를 주면 그 성별이 명시된 경로를
+        동점 처리 시 우선한다.
         """
         exclude_set = set(exclude)
         pool = [c for c in candidate_ids if c not in exclude_set and c in self.categories]
@@ -249,22 +261,81 @@ class MasterDB:
             return list(pool[:limit])
         scored = [
             (
-                _matching._overlap(name, self.categories[c].cat_name)
-                + 0.5 * _matching._overlap(name, self.categories[c].full_path),
+                -(
+                    _matching._overlap(name, self.categories[c].cat_name)
+                    + 0.5 * _matching._overlap(name, self.categories[c].full_path)
+                ),
+                0 if (gender and _matching.has_gender(self.categories[c].full_path, gender)) else 1,
                 len(self.categories[c].full_path),
                 c,
             )
             for c in pool
         ]
-        scored.sort(key=lambda t: (-t[0], t[1]))
-        return [c for _score, _len, c in scored[:limit]]
+        scored.sort(key=lambda t: t[:3])
+        return [c for *_rest, c in scored[:limit]]
 
-    def resolve_ranked(self, market: str, keyword: str, *, limit: int = 10) -> list[tuple[str, str]]:
+    def _direct_name_matches(
+        self, market: str, keyword: str, market_ids: Sequence[str], *, gender: str = ""
+    ) -> list[str]:
+        """★요건(절대): "엑셀(CATEGORY_MASTER) 카테고리명이 100% 우선" —
+        KEYWORD_DICTIONARY 사전에 연결이 없어도, 검색어 글자가 카테고리명
+        (리프 우선, 다음 전체경로) 안에 그대로 들어있으면 그것부터 찾는다.
+
+        실사례: 쿠팡 "여성화 > 하이힐/펌프스/정장구두" 는 "구두" 라는
+        글자를 그대로 담고 있는데도, 사전에 "구두"→이 카테고리 연결이
+        빠져 있어 엉뚱한(유아동) 카테고리로 샜다. 사전이 불완전해도
+        카테고리명 자체는 원본(엑셀)에서 그대로 가져온 값이므로, 이
+        직접 포함 여부를 사전 매칭과 별개로 항상 확인한다.
+        """
+        want_norm = _matching.normalize(keyword) if _matching is not None else keyword.strip().lower()
+        if not want_norm:
+            return []
+        leaf_hits: list[tuple[int, int, str]] = []
+        other_hits: list[tuple[int, int, str]] = []
+        for cid in market_ids:
+            node = self.categories.get(cid)
+            if node is None:
+                continue
+            # ★검색어와 필터의 성별이 경로에 **함께** 명시돼 있으면 우선한다
+            #   (예: "여성패션 > 여성화 > 하이힐/펌프스/정장구두" 는 "여성"이
+            #   두 번 나오는 만큼 신뢰도가 높다) — 그래야 성별 표기가 아예
+            #   없는, 우연히 글자만 짧아 비슷해 보이는 무관한 후보(예:
+            #   "스케이트화/스케이트구두")보다 앞선다.
+            gender_bonus = 0
+            if gender and _matching is not None and _matching.has_gender(node.full_path, gender):
+                gender_bonus = -1  # 정렬 시 작을수록 우선이므로 보너스는 음수
+            name_norm = (
+                _matching.normalize(node.cat_name) if _matching is not None else node.cat_name.strip().lower()
+            )
+            if want_norm in name_norm:
+                leaf_hits.append((gender_bonus, len(name_norm), cid))
+                continue
+            path_norm = (
+                _matching.normalize(node.full_path) if _matching is not None else node.full_path.strip().lower()
+            )
+            if want_norm in path_norm:
+                other_hits.append((gender_bonus, len(path_norm), cid))
+        # 카테고리명(리프) 자체에 포함된 것을 우선하고, 그 안에서는 같은
+        # 성별이 명시된 것 → 이름이 짧을수록(더 구체적으로 일치) 순.
+        leaf_hits.sort(key=lambda t: (t[0], t[1]))
+        other_hits.sort(key=lambda t: (t[0], t[1]))
+        return [cid for _g, _len, cid in leaf_hits] + [cid for _g, _len, cid in other_hits]
+
+    def resolve_ranked(
+        self, market: str, keyword: str, *, limit: int = 10, gender: str = ""
+    ) -> list[tuple[str, str]]:
         """(Cat_ID, 단계설명) 여러 개를 우선순위대로 반환한다.
 
         상위 호출부(`map_categories.best_category_via_master`)가 브랜드·
         성별 절대규칙으로 앞 후보를 건너뛰어도 다음 후보로 계속 시도할
-        수 있게, **하나만** 주지 않고 랭킹을 준다.
+        수 있게, **하나만** 주지 않고 랭킹을 준다. `gender` 를 주면(필터
+        명의 성별) 1.5)단계에서 같은 성별이 함께 명시된 카테고리를 우선
+        한다.
+
+        순서: 1) 완전일치/유사어(EX) · 2) 유사어(SY) · 3) 형태소분리(MO)
+        (KEYWORD_DICTIONARY 조회) → 1.5) 카테고리명에 검색어가 그대로
+        포함(엑셀 원본 그대로, 사전이 비어 있어도 항상 확인) → 4) 최근접
+        강제지정(bigram 유사도).
         """
         want = str(keyword or "").strip()
         market_ids = self._by_market.get(market, [])
@@ -277,9 +348,19 @@ class MasterDB:
                     hit.priority, hit.mapping_type
                 )
                 out.append((hit.target_cat_id, label))
+        if len(out) < limit and want:
+            seen = {cid for cid, _ in out}
+            direct = [
+                cid
+                for cid in self._direct_name_matches(market, want, market_ids, gender=gender)
+                if cid not in seen
+            ]
+            out.extend((cid, "1.5) 카테고리명 직접포함") for cid in direct[: limit - len(out)])
         if len(out) < limit:
             seen = {cid for cid, _ in out}
-            more = self._similar_candidates(want, market_ids, exclude=seen, limit=limit - len(out))
+            more = self._similar_candidates(
+                want, market_ids, exclude=seen, limit=limit - len(out), gender=gender
+            )
             out.extend((cid, "4) 최근접 강제지정") for cid in more)
         return out
 

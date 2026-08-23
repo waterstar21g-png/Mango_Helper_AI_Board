@@ -352,18 +352,32 @@ def best_category_via_master(
     """
     parsed = matching.parse_filter_name(filter_name)
     gender = matching.gender_of(parsed.raw)
+    filter_mentions_child = matching.mentions_child(parsed.raw)
     skip = {matching.normalize(e) for e in (exclude or []) if str(e or "").strip()}
     terms = [t for t in [*parsed.lows, parsed.mid] if t]
     if not terms:
         terms = [parsed.raw]
 
-    confident: tuple[str, str] | None = None  # 확실한 매칭(1~3단계), 절대규칙 다 지킴
-    forced_fallback: tuple[str, str] | None = None  # 4단계 강제지정, 절대규칙 다 지킴
+    # ★검색어 순서(하위→중위)별로 첫 확실매칭(confident)·4단계강제지정
+    # (forced_fallback)을 각각 기록한다 — 더 구체적인(앞쪽) 검색어의
+    # forced_fallback 이 덜 구체적인(뒤쪽) 검색어의 confident 보다
+    # 실제로 더 정확한 경우가 있다(실사례: 옥션2.0 "여성-신발-구두"에서
+    # "구두"엔 여성용 완전일치가 없어 "신발 > 여성단화"가 4단계로만
+    # 잡히는데, 그걸 무시하고 뒤쪽 검색어 "신발"의 밋밋한 confident
+    # ("신발" 그 자체)를 골라버리면 덜 구체적인 결과가 된다). 그래서
+    # 두 후보 모두 모은 뒤, "검색어가 더 구체적인 쪽"을 우선한다.
+    confident_by_idx: dict[int, tuple[str, str]] = {}
+    forced_by_idx: dict[int, tuple[str, str]] = {}
     weak_only: tuple[str, str] | None = None  # 절대규칙은 지키지만 비제품·계열불일치뿐일 때
 
-    for term in terms:
+    for idx, term in enumerate(terms):
         term_cls = matching.class_of(term)
-        for cat_id, step in master_db.resolve_ranked(market_display_name, term, limit=10):
+        # ★limit을 넉넉히 준다 — 카테고리명 직접포함(1.5단계) 후보 중
+        # 앞쪽이 성별·비제품 규칙에 걸려 계속 걸러지면, 진짜 정답이 뒤로
+        # 밀려 있어도 좁은 limit 에 잘려 후보 목록에 아예 안 들어오는
+        # 사고가 났다(실사례: 쿠팡 "구두" 검색에서 "하이힐/펌프스/
+        # 정장구두"가 13번째라 limit=10 에 잘려 아예 못 봄).
+        for cat_id, step in master_db.resolve_ranked(market_display_name, term, limit=50, gender=gender):
             path = master_db.full_path(cat_id)
             if not path or matching.normalize(path) in skip:
                 continue
@@ -371,6 +385,11 @@ def best_category_via_master(
                 continue  # ★절대규칙(예외 없음): 브랜드 카테고리는 절대 확정하지 않는다
             if gender and matching.violates_gender(path, filter_name):
                 continue  # ★절대규칙(예외 없음): 반대 성별 카테고리는 확정하지 않는다
+            # ★절대규칙(실사례): 필터명이 아동을 언급하지 않았는데 후보가
+            #   아동/유아 카테고리("유아동신발 > 여아구두")면 확정하지
+            #   않는다 — "성인용 검색이 아동으로 새는" 사고를 막는다.
+            if not filter_mentions_child and matching.is_child_category(path):
+                continue
             label = f'{step} · 검색어="{term}"'
             # ★소프트규칙: 건강용품·관리용품("건강목걸이") 이거나, 검색어의
             #   품목 계열과 후보의 계열이 서로 다르면("목걸이" 액세서리 ↔
@@ -384,18 +403,25 @@ def best_category_via_master(
                     weak_only = (path, label)
                 continue
             if step.startswith("4)"):
-                if forced_fallback is None:
-                    forced_fallback = (path, label)
+                if idx not in forced_by_idx:
+                    forced_by_idx[idx] = (path, label)
                 continue
-            confident = (path, label)
+            if idx not in confident_by_idx:
+                confident_by_idx[idx] = (path, label)
             break
-        if confident:
-            break
+        if idx == 0 and confident_by_idx.get(0):
+            break  # 가장 구체적인 검색어가 이미 확실하면 더 볼 필요 없다
 
-    if confident:
-        return confident
-    if forced_fallback:
-        return forced_fallback
+    best_confident_idx = min(confident_by_idx) if confident_by_idx else None
+    best_forced_idx = min(forced_by_idx) if forced_by_idx else None
+    if best_confident_idx is not None and (
+        best_forced_idx is None or best_confident_idx <= best_forced_idx
+    ):
+        return confident_by_idx[best_confident_idx]
+    if best_forced_idx is not None:
+        return forced_by_idx[best_forced_idx]
+    if best_confident_idx is not None:
+        return confident_by_idx[best_confident_idx]
     if weak_only:
         return weak_only
     return "", "미검출"
