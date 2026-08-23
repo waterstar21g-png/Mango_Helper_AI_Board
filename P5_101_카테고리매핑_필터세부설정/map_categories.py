@@ -52,6 +52,7 @@ for _p in (P2_DIR, P5_DIR):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import matching  # noqa: E402
 import category_db  # noqa: E402
+import keyword_dictionary  # noqa: E402
 import market_cache  # noqa: E402
 
 ProgressFn = Callable[[str], None]
@@ -314,6 +315,19 @@ def build_category_db(excels: dict[str, Sequence[str]]) -> category_db.CategoryD
     return category_db.CategoryDB.build(excels)
 
 
+def build_keyword_db(excels: dict[str, Sequence[str]]) -> keyword_dictionary.KeywordDB:
+    """★요건(연관검색어DB, "최신성 우선" 원칙에 따른 공식 기준):
+    6개 마켓 엑셀 전체로 CATEGORY_MASTER+KEYWORD_DICTIONARY 를 구축해
+    `find_category` 의 5) 단계 검색어 확장에 함께 쓴다.
+
+    ★주의: `category_db.py`(마켓 교차색인)와 달리 이건 실제 매핑 실행
+    경로에 처음 연결하는 것이다 — 이전까지는 만들어만 두고 전혀
+    쓰이지 않았다는 지적을 받아 이번에 연결했다.
+    """
+    all_paths = [p for paths in (excels or {}).values() for p in paths]
+    return keyword_dictionary.build(all_paths)
+
+
 def discover_market_excels(folder: str | Path) -> dict[str, str]:
     """폴더에서 마켓별 엑셀을 파일명으로 자동 매칭."""
     found: dict[str, str] = {}
@@ -386,13 +400,14 @@ def best_category(
     *,
     min_score: float = MIN_SCORE,
     db: category_db.CategoryDB | None = None,
+    keyword_db: keyword_dictionary.KeywordDB | None = None,
 ) -> tuple[str, float]:
     """★요건재정의(2026-08-22)의 순서(matching.find_category)로 최적 카테고리를 고른다.
 
     1) 완전일치 → 2) 하위검색 → 3) 우선순위 → 4) 확장범주 → 5) 정보화DB
     (2~5 최대 3회 반복) → 6) 근접매핑 강제지정. 못 찾으면 유사도 폴백.
     """
-    cat, _step = matching.find_category(filter_name, list(categories), db=db)
+    cat, _step = matching.find_category(filter_name, list(categories), db=db, keyword_db=keyword_db)
     if cat:
         return cat, 1.0
     return similarity_best(filter_name, categories, min_score=min_score)
@@ -404,9 +419,12 @@ def best_category_with_step(
     *,
     exclude: Sequence[str] = (),
     db: category_db.CategoryDB | None = None,
+    keyword_db: keyword_dictionary.KeywordDB | None = None,
 ) -> tuple[str, str]:
     """최적 카테고리 + 어느 단계에서 찾았는지 (exclude 는 이미 시도한 것)."""
-    cat, step = matching.find_category(filter_name, list(categories), exclude=exclude, db=db)
+    cat, step = matching.find_category(
+        filter_name, list(categories), exclude=exclude, db=db, keyword_db=keyword_db
+    )
     if cat:
         return cat, step
     skip = {matching.normalize(e) for e in exclude or []}
@@ -1111,6 +1129,7 @@ def map_one_market(
     exclude: Sequence[str] = (),
     retries: int = MAP_RETRIES,
     db: category_db.CategoryDB | None = None,
+    keyword_db: keyword_dictionary.KeywordDB | None = None,
     progress: ProgressFn | None = None,
 ) -> MappedItem:
     """엑셀 확정 → 망고 제출을 **딱 한 번**만 한다.
@@ -1121,8 +1140,8 @@ def map_one_market(
     끝난다 — 그 결과 하나를 가지고 망고에 딱 한 번만 검색·제출한다.
     실패하면 다른 카테고리로 다시 망고를 검색하지 않고 그대로 매핑 실패
     로 끝낸다. `retries` 인자는 하위호환을 위해 남겨두되 더 이상 쓰지
-    않는다(항상 1회). `db` 는 요건재정의(2026-08-22 B)의 통합정보화DB —
-    엑셀 탐색 5) 단계(연관검색어)에서 쓴다.
+    않는다(항상 1회). `db`(교차색인)·`keyword_db`(ERD 연관검색어DB) 는
+    엑셀 탐색 5) 단계(연관검색어)에서 함께 쓴다.
     """
     return _map_once(
         popup,
@@ -1132,6 +1151,7 @@ def map_one_market(
         variant=variant,
         exclude=exclude,
         db=db,
+        keyword_db=keyword_db,
         progress=progress,
     )
 
@@ -1145,6 +1165,7 @@ def _map_once(
     variant: str = "",
     exclude: Sequence[str] = (),
     db: category_db.CategoryDB | None = None,
+    keyword_db: keyword_dictionary.KeywordDB | None = None,
     progress: ProgressFn | None = None,
 ) -> MappedItem:
     """한 마켓(+구분) 매핑 — 최적 카테고리 → 검색어 입력 → 검색 → 목록 선택."""
@@ -1155,14 +1176,18 @@ def _map_once(
     if variant and not select_variant(popup, market, variant, progress=progress):
         return MappedItem(market, "", 0.0, False, f"구분({variant}) 선택 실패")
 
-    category, step = best_category_with_step(filter_name, categories, exclude=exclude, db=db)
+    category, step = best_category_with_step(
+        filter_name, categories, exclude=exclude, db=db, keyword_db=keyword_db
+    )
 
     # ★절대규칙: 반대 성별 카테고리는 고르지 않는다
     if category and matching.violates_gender(category, filter_name):
         gender = matching.gender_of(filter_name)
         safe = matching.strip_opposite_gender(categories, gender)
         _log(progress, f"  {label}: 반대 성별 카테고리 배제 → 재선정", major=True)
-        category, step = best_category_with_step(filter_name, safe, exclude=exclude, db=db)
+        category, step = best_category_with_step(
+            filter_name, safe, exclude=exclude, db=db, keyword_db=keyword_db
+        )
 
     # ★요건: 최적 카테고리는 **반드시 엑셀 목록 안의 값**이어야 한다
     if category and not matching.is_from(categories, category):
@@ -1283,6 +1308,7 @@ def map_one_row(
     markets: Sequence[str] | None = None,
     variant_choice: dict[str, str] | None = None,
     db: category_db.CategoryDB | None = None,
+    keyword_db: keyword_dictionary.KeywordDB | None = None,
     progress: ProgressFn | None = None,
 ) -> dict:
     """한 행 — 설정수정 팝업 → AI 매핑 → 마켓별 매핑 → 설정저장 → 닫기."""
@@ -1301,14 +1327,17 @@ def map_one_row(
         pass
 
     try:
-        # ★요건재정의(2026-08-22 C-3): [AI 자동 매핑 시작하기] 버튼은
-        # 클릭한다("당분간 로직 수행 않함" — 화면 절차는 그대로 따르되,
-        # 그 결과에 우리 로직을 얹지 않는다). 아래 마켓별 매핑은 이
-        # 버튼의 결과와 무관하게 항상 엑셀에서 확정한 값으로 검색·선택
-        # 하며, 실패하면 `clear_market_category` 로 그 필드를 명시적으로
-        # 비운다 — AI 버튼이 먼저 채워둔, 우리가 검증하지 못한 값이 그대로
-        # 저장되는 사고를 막는 안전장치가 이미 있다.
-        click_ai_mapping(popup, progress=progress)
+        # ★절대: [AI 자동 매핑 시작하기] 버튼은 클릭하지 않는다.
+        #   요건재정의(2026-08-22 C-3) 원문 "AI자동매칭 시작하기 버튼클릭
+        #   ****당분간 로직 수행 않함****" 을 "클릭은 하되 결과에 로직을
+        #   얹지 않는다"로 잘못 해석해 v2.29.0 에서 되살렸던 것을 되돌린다
+        #   — 사용자가 명시적으로 "하지 말라고 했다"고 재확인했다. v2.27.0
+        #   에서 끈 이유(이 버튼이 필드를 먼저 채운 뒤 우리 검색이 실패하면
+        #   검증 안 된 값이 그대로 저장될 위험)가 여전히 유효하므로, 이
+        #   단계 자체를 다시 건너뛴다. 마켓별 매핑은 이 버튼과 무관하게
+        #   항상 엑셀에서 확정한 값으로 검색·선택하며, 실패하면
+        #   `clear_market_category` 로 그 필드를 명시적으로 비운다.
+        # click_ai_mapping(popup, progress=progress)
         for market in codes:
             if stop_requested():
                 break
@@ -1323,6 +1352,7 @@ def map_one_row(
                     excels.get(market, []),
                     variant=variant,
                     db=db,
+                    keyword_db=keyword_db,
                     progress=progress,
                 )
                 if item.ok:
@@ -1348,6 +1378,7 @@ def map_one_row(
                             variant=variant,
                             exclude=tried,
                             db=db,
+                            keyword_db=keyword_db,
                             progress=progress,
                         )
                         if not item.ok:
@@ -1387,6 +1418,7 @@ def map_one_row(
                     excels.get(market, []),
                     variant=variant,
                     db=db,
+                    keyword_db=keyword_db,
                     progress=progress,
                 )
                 record = dict(retry.__dict__)
@@ -1432,6 +1464,7 @@ def map_one_row(
                     variant=variant,
                     exclude=[bad_name],
                     db=db,
+                    keyword_db=keyword_db,
                     progress=progress,
                 )
                 record = dict(retry.__dict__)
@@ -1567,6 +1600,15 @@ def run_mapping(
         f"통합정보화DB 구축 — 마켓 {db.market_count}건 · 카테고리 {db.path_count}건",
         major=True,
     )
+    # ★요건(연관검색어DB, "최신성 우선"): keyword_dictionary 도 실제 실행
+    #   경로에 연결한다 — 이전까지 만들어만 두고 전혀 쓰이지 않았다.
+    keyword_db = build_keyword_db(data)
+    _log(
+        progress,
+        f"연관검색어DB 구축 — 카테고리 {len(keyword_db.categories)}건 · "
+        f"검색어 {len(keyword_db.keywords)}건",
+        major=True,
+    )
 
     try:
         import collect as p2  # noqa: WPS433
@@ -1631,6 +1673,7 @@ def run_mapping(
                     markets=markets,
                     variant_choice=variant_choice,
                     db=db,
+                    keyword_db=keyword_db,
                     progress=progress,
                 )
                 result.details.append(detail)
@@ -1662,11 +1705,12 @@ def run_dry(
 ) -> list[dict]:
     """브라우저 없이 매칭 결과만 확인 (검증용)."""
     db = build_category_db(excels)
+    keyword_db = build_keyword_db(excels)
     out: list[dict] = []
     for name in filter_names:
         row = {"filter": name, "items": []}
         for code, cats in excels.items():
-            cat, step = best_category_with_step(name, cats, db=db)
+            cat, step = best_category_with_step(name, cats, db=db, keyword_db=keyword_db)
             row["items"].append({"market": code, "category": cat, "step": step})
             _log(progress, f"{name} · {MARKETS.get(code, code)} → {cat or '(없음)'} [{step}]")
         out.append(row)
