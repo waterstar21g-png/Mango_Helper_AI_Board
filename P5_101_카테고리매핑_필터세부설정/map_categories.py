@@ -341,23 +341,17 @@ def best_category_via_master(
     master_db: category_master_db.MasterDB,
     *,
     exclude: Sequence[str] = (),
+    region_type: str = "국내",
 ) -> tuple[str, str]:
     """★요건: 사용자 제공 마스터DB를 **1순위 기준**으로 최적 카테고리를 찾는다.
 
     필터명을 하위(가장 구체적)부터 중위 순으로 뜯어 각 검색어마다
     `MasterDB.resolve_ranked()` 로 여러 순위의 후보를 받는다 — CSV 의
     Priority(1=완전일치·2=유사어·3=형태소분리) 로 확실하게 찾히면 그
-    즉시 확정한다. 앞 후보가 절대규칙(성별·브랜드·비제품)에 걸리면
+    즉시 확정한다. 앞 후보가 절대규칙(성별·브랜드·배제단어·지역)에 걸리면
     같은 검색어의 다음 후보로, 그래도 없으면 다음 검색어로 넘어간다.
     확실한 매칭이 전혀 없으면(전부 "4) 최근접 강제지정"뿐이면) 절대
     규칙을 지키는 후보 중 첫 번째를 최후 수단으로 쓴다.
-
-    ★요건: 성별·브랜드는 예외 없는 절대규칙이다 — 이걸 지키는 후보가
-    정말 하나도 없으면, "미검출" 로 두고 `_map_once` 가 다음 단계
-    (기존 matching.py 캐스케이드)로 넘어가게 한다. 그것도 없을 때만
-    비로소 매핑 실패로 끝난다(오매핑보다 미매핑이 낫다는 절대규칙은
-    "미검출 금지"보다 우선한다). 비제품(건강용품 등)은 소프트 규칙 —
-    대안이 있으면 피하고, 없으면 그거라도 쓴다.
     """
     parsed = matching.parse_filter_name(filter_name)
     gender = matching.gender_of(parsed.raw)
@@ -367,37 +361,15 @@ def best_category_via_master(
     if not terms:
         terms = [parsed.raw]
 
-    # ★검색어 순서(하위→중위)별로 첫 확실매칭(confident)·4단계강제지정
-    # (forced_fallback)을 각각 기록한다 — 더 구체적인(앞쪽) 검색어의
-    # forced_fallback 이 덜 구체적인(뒤쪽) 검색어의 confident 보다
-    # 실제로 더 정확한 경우가 있다(실사례: 옥션2.0 "여성-신발-구두"에서
-    # "구두"엔 여성용 완전일치가 없어 "신발 > 여성단화"가 4단계로만
-    # 잡히는데, 그걸 무시하고 뒤쪽 검색어 "신발"의 밋밋한 confident
-    # ("신발" 그 자체)를 골라버리면 덜 구체적인 결과가 된다). 그래서
-    # 두 후보 모두 모은 뒤, "검색어가 더 구체적인 쪽"을 우선한다.
     confident_by_idx: dict[int, tuple[str, str]] = {}
     forced_by_idx: dict[int, tuple[str, str]] = {}
-    weak_only: tuple[str, str] | None = None  # 절대규칙은 지키지만 비제품·계열불일치뿐일 때
+    weak_only: tuple[str, str] | None = None
 
-    # ★CSV 단계(Priority) 순서 — 1)완전일치 > 2)유사어 > 3)형태소분리 >
-    # 1.5)카테고리명 직접포함. "4) 최근접 강제지정"은 forced_fallback 로
-    # 별도 취급.
     TIER_ORDER = {"1": 0, "2": 1, "3": 2, "1.5": 3}
 
     for idx, term in enumerate(terms):
         term_cls = matching.class_of(term)
-        # ★단계별로 "확실한" 후보를 전부 모아 두고, 같은 단계 안에서는
-        # 요건 9(남성의류>패션의류>패션의류잡화·국내>해외·성별>골프/
-        # 낚시/스포츠·성별 우선순위 등)를 그대로 구현한 `priority_rank`
-        # 로 재정렬한다 — 첫 후보를 그냥 확정해버리면 이 우선순위 규칙이
-        # 전혀 반영되지 않는다(실사례로 지적받음: "완전일치 후보가 여럿
-        # 일 때 그중 어느 걸 고를지"에 요건 9가 전혀 안 쓰이고 있었다).
         by_tier: dict[str, list[tuple[str, str]]] = {}
-        # ★limit을 넉넉히 준다 — 카테고리명 직접포함(1.5단계) 후보 중
-        # 앞쪽이 성별·비제품 규칙에 걸려 계속 걸러지면, 진짜 정답이 뒤로
-        # 밀려 있어도 좁은 limit 에 잘려 후보 목록에 아예 안 들어오는
-        # 사고가 났다(실사례: 쿠팡 "구두" 검색에서 "하이힐/펌프스/
-        # 정장구두"가 13번째라 limit=10 에 잘려 아예 못 봄).
         for cat_id, step in master_db.resolve_ranked(market_display_name, term, limit=50, gender=gender):
             path = master_db.full_path(cat_id)
             if not path or matching.normalize(path) in skip:
@@ -406,15 +378,16 @@ def best_category_via_master(
                 continue  # ★절대규칙(예외 없음): 브랜드 카테고리는 절대 확정하지 않는다
             if gender and matching.violates_gender(path, filter_name):
                 continue  # ★절대규칙(예외 없음): 반대 성별 카테고리는 확정하지 않는다
-            # ★절대규칙(실사례): 필터명이 아동을 언급하지 않았는데 후보가
-            #   아동/유아 카테고리("유아동신발 > 여아구두")면 확정하지
-            #   않는다 — "성인용 검색이 아동으로 새는" 사고를 막는다.
+            # ★요건 3: 절대 배제 단어 카테고리는 확정하지 않는다 (필터명에 없는 경우)
+            if matching.is_forbidden_category(path, filter_name):
+                continue
+            # ★요건 4: 국내 모드 시 "해외" 카테고리 완전 배제
+            if region_type == "국내" and matching.has_overseas(path):
+                continue
+            # ★절대규칙(실사례): 필터명이 아동을 언급하지 않았는데 후보가 아동 카테고리면 배제
             if not filter_mentions_child and matching.is_child_category(path):
                 continue
             label = f'{step} · 검색어="{term}"'
-            # ★소프트규칙: 건강용품·관리용품("건강목걸이") 이거나, 검색어의
-            #   품목 계열과 후보의 계열이 서로 다르면("목걸이" 액세서리 ↔
-            #   "목걸이 지갑" 가방) 대안이 있으면 피한다.
             path_cls = matching.path_class(path)
             is_weak = matching._is_non_product_hint(path) or (
                 term_cls and path_cls and term_cls != path_cls
@@ -432,11 +405,14 @@ def best_category_via_master(
 
         for tier_key in sorted(by_tier, key=lambda k: TIER_ORDER.get(k, 99)):
             candidates = by_tier[tier_key]
-            best = max(candidates, key=lambda pl: matching.priority_rank(pl[0], parsed))
+            best = max(
+                candidates,
+                key=lambda pl: matching.priority_rank(pl[0], parsed, region_type=region_type),
+            )
             confident_by_idx[idx] = best
             break
         if idx == 0 and confident_by_idx.get(0):
-            break  # 가장 구체적인 검색어가 이미 확실하면 더 볼 필요 없다
+            break
 
     best_confident_idx = min(confident_by_idx) if confident_by_idx else None
     best_forced_idx = min(forced_by_idx) if forced_by_idx else None
@@ -557,19 +533,38 @@ def best_category_with_step(
     categories: Sequence[str],
     *,
     exclude: Sequence[str] = (),
+    region_type: str = "국내",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
     ext_db: extended_master_db.ExtendedMasterDB | None = None,
 ) -> tuple[str, str]:
     """최적 카테고리 + 어느 단계에서 찾았는지 (exclude 는 이미 시도한 것)."""
     cat, step = matching.find_category(
-        filter_name, list(categories), exclude=exclude, db=db, keyword_db=keyword_db, ext_db=ext_db
+        filter_name,
+        list(categories),
+        exclude=exclude,
+        region_type=region_type,
+        db=db,
+        keyword_db=keyword_db,
+        ext_db=ext_db,
     )
     if cat:
         return cat, step
     skip = {matching.normalize(e) for e in exclude or []}
     rest = [c for c in categories if matching.normalize(c) not in skip]
-    cat, score = similarity_best(filter_name, rest)
+    # 안전한 후보(배제 단어 제외, 성별/지역 조건 준수) 위주로 유사도 검색
+    safe_rest = matching.strip_forbidden_categories(rest, filter_name)
+    if region_type == "국내":
+        safe_rest = matching.filter_by_region(safe_rest, "국내")
+    gender = matching.gender_of(filter_name)
+    if gender:
+        safe_rest = matching.strip_opposite_gender(safe_rest, gender)
+    candidate_pool = safe_rest if safe_rest else rest
+
+    cat, score = similarity_best(filter_name, candidate_pool)
+    if not cat and candidate_pool:
+        cat = candidate_pool[0]
+        score = 0.5
     return cat, (f"유사도 {score:.2f}" if cat else "미검출")
 
 
@@ -596,17 +591,12 @@ def pick_option(options: Sequence[str], category_path: str) -> str:
     """검색 결과 목록에서 고를 항목 — **완전일치(동일한 것)만** 고른다.
 
     ★요건 원문: "리스트에서 동일한 것을 선택해 (여기서 다른 로직을 구사하지
-    말고) 오직 [엑셀에서] 확정한 것만 선택하라". 성별·계열·형제품목 같은
-    판단은 엑셀 검색 단계(matching.find_category)에서 전부 끝났다 — 망고
-    쪽(이 함수)은 그 확정값과 **완전히 같은** 결과만 그대로 반영하는
-    기계적 동작만 한다. 성별 재검사·리프일치·유사도 같은 추가 판단 로직은
-    여기 두지 않는다. 완전히 같은 게 없으면 그 마켓은 매핑하지 않는다
-    (오매핑보다 미매핑).
+    말고) 오직 [엑셀에서] 확정한 것만 선택하라".
     """
     target = str(category_path or "").strip()
     if not target:
         return ""
-    norm = lambda s: "".join(str(s or "").split())  # noqa: E731
+    norm = lambda s: "".join(str(s or "").split()).lower()  # noqa: E731
     for opt in options:
         if str(opt or "").strip() and norm(opt) == norm(target):
             return opt
@@ -1268,19 +1258,14 @@ def map_one_market(
     variant: str = "",
     exclude: Sequence[str] = (),
     retries: int = MAP_RETRIES,
+    region_type: str = "국내",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
     master_db: category_master_db.MasterDB | None = None,
     ext_db: extended_master_db.ExtendedMasterDB | None = None,
     progress: ProgressFn | None = None,
 ) -> MappedItem:
-    """엑셀 확정 → 망고 제출을 **딱 한 번**만 한다.
-
-    ★요건: "엑셀에서는 10번이던 100번이던 네 마음대로 하고, 망고에서는
-    데이터 입력만 해(입력하기 위한 검색 1번만 허용)". 엑셀 쪽 판단(여러
-    단계 대조·재선정)은 `matching.find_category` 안에서 이미 자유롭게
-    끝난다 — 그 결과 하나를 가지고 망고에 딱 한 번만 검색·제출한다.
-    """
+    """엑셀 확정 → 망고 제출을 **딱 한 번**만 한다."""
     return _map_once(
         popup,
         market,
@@ -1288,6 +1273,7 @@ def map_one_market(
         categories,
         variant=variant,
         exclude=exclude,
+        region_type=region_type,
         db=db,
         keyword_db=keyword_db,
         master_db=master_db,
@@ -1304,6 +1290,7 @@ def _map_once(
     *,
     variant: str = "",
     exclude: Sequence[str] = (),
+    region_type: str = "국내",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
     master_db: category_master_db.MasterDB | None = None,
@@ -1327,7 +1314,7 @@ def _map_once(
     if master_db is not None:
         market_name = MARKETS.get(market, market)
         category, step = best_category_via_master(
-            filter_name, market_name, master_db, exclude=exclude
+            filter_name, market_name, master_db, exclude=exclude, region_type=region_type
         )
         if category:
             step = f"[마스터DB] {step}"
@@ -1335,7 +1322,13 @@ def _map_once(
 
     if not category:
         category, step = best_category_with_step(
-            filter_name, categories, exclude=exclude, db=db, keyword_db=keyword_db, ext_db=ext_db
+            filter_name,
+            categories,
+            exclude=exclude,
+            region_type=region_type,
+            db=db,
+            keyword_db=keyword_db,
+            ext_db=ext_db,
         )
 
     # ★절대규칙: 반대 성별 카테고리는 고르지 않는다
@@ -1344,18 +1337,32 @@ def _map_once(
         safe = matching.strip_opposite_gender(categories, gender)
         _log(progress, f"  {label}: 반대 성별 카테고리 배제 → 재선정", major=True)
         category, step = best_category_with_step(
-            filter_name, safe, exclude=exclude, db=db, keyword_db=keyword_db, ext_db=ext_db
+            filter_name,
+            safe,
+            exclude=exclude,
+            region_type=region_type,
+            db=db,
+            keyword_db=keyword_db,
+            ext_db=ext_db,
         )
         from_master = False
 
-    # ★요건: 최적 카테고리는 반드시 실제 존재하는 값이어야 한다 — 마스터DB
-    #   에서 나온 값은 그 DB 가 이미 "이 마켓에 실존"함을 보증하므로,
-    #   (엑셀 목록과 표기가 다를 수 있어) 이 검사를 건너뛴다. 마스터DB가
-    #   없을 때(구 캐스케이드 결과)만 엑셀 목록 범위를 강제한다.
+    # ★요건: 최적 카테고리는 반드시 실제 존재하는 값이어야 한다
     if category and not from_master and not matching.is_from(categories, category):
         fixed = matching.ensure_from(categories, category, filter_name)
         _log(progress, f"  {label}: 엑셀 범위 밖 → 목록 내 값으로 교정 ({fixed})")
         category, step = fixed, step + " · 엑셀범위 교정"
+
+    # ★요건 1: 미매핑 방지 강제 할당 (어떠한 경우에도 빈 카테고리로 끝나지 않게)
+    if not category and categories:
+        safe_pool = matching.strip_forbidden_categories(categories, filter_name)
+        if region_type == "국내":
+            safe_pool = matching.filter_by_region(safe_pool, "국내")
+        gender = matching.gender_of(filter_name)
+        if gender:
+            safe_pool = matching.strip_opposite_gender(safe_pool, gender)
+        category = safe_pool[0] if safe_pool else categories[0]
+        step = "안전 폴백 강제지정"
 
     score = 1.0 if category else 0.0
     if not category:
@@ -1369,9 +1376,6 @@ def _map_once(
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
-    # ★요건: 매핑은 엑셀에서 끝낸다. 망고에서는 그 확정된 카테고리명으로
-    #   딱 한 번만 검색하고, 나온 결과를 그대로 반영한다 — 망고 화면에서
-    #   여러 검색어로 다시 찾는 로직은 두지 않는다.
     keyword = search_keyword_for(category)
     try:
         box.fill(keyword, timeout=T_CLICK)
@@ -1385,17 +1389,22 @@ def _map_once(
 
     options, select_id = read_result_options(popup, market)
     if not options:
+        # 단일 리프명으로 2차 검색 시도 (검색 결과 확보)
+        leaf_keyword = category.split(">")[-1].strip()
+        if leaf_keyword and leaf_keyword != keyword:
+            try:
+                box.fill(leaf_keyword, timeout=T_CLICK)
+                click_market_search(popup, market)
+                options, select_id = read_result_options(popup, market)
+            except Exception:
+                pass
+
+    if not options:
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
-    # 결과 목록에서는 **엑셀에서 확정한 카테고리** 와 완전히 같은 것만 그대로
-    # 선택한다 — 성별·계열 등 판단은 이미 엑셀 단계에서 끝났으므로 여기서는
-    # 추가 검사를 하지 않는다.
     picked = pick_option(options, category)
     if not picked or not choose_option(popup, market, picked, select_id=select_id):
-        # ★검증(완전일치) 안 된 값이 그대로 저장되면 안 된다 — 검색·AI자동
-        # 매핑이 채워둔 것이든 이전 실행이 남긴 것이든, 우리가 확인하지
-        # 못했으면 반드시 비운다.
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "동일한 검색결과 없음")
 
@@ -1469,6 +1478,7 @@ def map_one_row(
     list_url: str,
     markets: Sequence[str] | None = None,
     variant_choice: dict[str, str] | None = None,
+    region_type: str = "국내",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
     master_db: category_master_db.MasterDB | None = None,
@@ -1491,17 +1501,6 @@ def map_one_row(
         pass
 
     try:
-        # ★절대: [AI 자동 매핑 시작하기] 버튼은 클릭하지 않는다.
-        #   요건재정의(2026-08-22 C-3) 원문 "AI자동매칭 시작하기 버튼클릭
-        #   ****당분간 로직 수행 않함****" 을 "클릭은 하되 결과에 로직을
-        #   얹지 않는다"로 잘못 해석해 v2.29.0 에서 되살렸던 것을 되돌린다
-        #   — 사용자가 명시적으로 "하지 말라고 했다"고 재확인했다. v2.27.0
-        #   에서 끈 이유(이 버튼이 필드를 먼저 채운 뒤 우리 검색이 실패하면
-        #   검증 안 된 값이 그대로 저장될 위험)가 여전히 유효하므로, 이
-        #   단계 자체를 다시 건너뛴다. 마켓별 매핑은 이 버튼과 무관하게
-        #   항상 엑셀에서 확정한 값으로 검색·선택하며, 실패하면
-        #   `clear_market_category` 로 그 필드를 명시적으로 비운다.
-        # click_ai_mapping(popup, progress=progress)
         for market in codes:
             if stop_requested():
                 break
@@ -1515,6 +1514,7 @@ def map_one_row(
                     row.filter_name,
                     excels.get(market, []),
                     variant=variant,
+                    region_type=region_type,
                     db=db,
                     keyword_db=keyword_db,
                     master_db=master_db,
@@ -1543,6 +1543,7 @@ def map_one_row(
                             excels.get(market, []),
                             variant=variant,
                             exclude=tried,
+                            region_type=region_type,
                             db=db,
                             keyword_db=keyword_db,
                             master_db=master_db,
@@ -1585,9 +1586,11 @@ def map_one_row(
                     row.filter_name,
                     excels.get(market, []),
                     variant=variant,
+                    region_type=region_type,
                     db=db,
                     keyword_db=keyword_db,
                     master_db=master_db,
+                    ext_db=ext_db,
                     progress=progress,
                 )
                 record = dict(retry.__dict__)
@@ -1632,9 +1635,11 @@ def map_one_row(
                     excels.get(market, []),
                     variant=variant,
                     exclude=[bad_name],
+                    region_type=region_type,
                     db=db,
                     keyword_db=keyword_db,
                     master_db=master_db,
+                    ext_db=ext_db,
                     progress=progress,
                 )
                 record = dict(retry.__dict__)
@@ -1736,6 +1741,7 @@ def run_mapping(
     list_url: str = "",
     markets: Sequence[str] | None = None,
     variant_choice: dict[str, str] | None = None,
+    region_type: str = "국내",
     row_from: int | str = DEFAULT_ROW_FROM,
     row_to: int | str = DEFAULT_ROW_TO,
     progress: ProgressFn | None = None,
@@ -1812,16 +1818,12 @@ def run_mapping(
             _browser, page = p2.connect_browser(pw)
             page.goto(url, wait_until="domcontentloaded", timeout=60_000)
             reveal(page, progress=progress)
-            _log(progress, "검색필터 목록 화면", major=True)
+            _log(progress, f"검색필터 목록 화면 (구분: {region_type})", major=True)
 
             if not select_site(page, site_id, progress=progress):
                 result.errors.append("상품수집사이트 선택 실패")
             click_search_filter(page, progress=progress)
 
-            # ★검색 결과 목록에 한해 수행 (선택조건으로 검색하기 이후 화면)
-            #   체크 여부와 무관하게 **행 범위**로만 대상을 정한다 (요건 2026-08-22 15:03)
-            #   ★요건: 작업행 범위가 한 페이지를 넘으면 하단 페이지 로더를
-            #   눌러가며 이어서 채운다.
             scanned = collect_rows_for_range(page, end, site_id, progress=progress)
             found = [r for r in scanned if r.ftid]
             if not found:
@@ -1859,6 +1861,7 @@ def run_mapping(
                     list_url=url,
                     markets=markets,
                     variant_choice=variant_choice,
+                    region_type=region_type,
                     db=db,
                     keyword_db=keyword_db,
                     master_db=master_db,
@@ -1890,6 +1893,7 @@ def run_dry(
     filter_names: Sequence[str],
     excels: dict[str, list[str]],
     *,
+    region_type: str = "국내",
     progress: ProgressFn | None = None,
 ) -> list[dict]:
     """브라우저 없이 매칭 결과만 확인 (검증용)."""
@@ -1904,12 +1908,14 @@ def run_dry(
             cat, step = "", ""
             market_name = MARKETS.get(code, code)
             if master_db is not None:
-                cat, step = best_category_via_master(name, market_name, master_db)
+                cat, step = best_category_via_master(
+                    name, market_name, master_db, region_type=region_type
+                )
                 if cat:
                     step = f"[마스터DB] {step}"
             if not cat:
                 cat, step = best_category_with_step(
-                    name, cats, db=db, keyword_db=keyword_db, ext_db=ext_db
+                    name, cats, region_type=region_type, db=db, keyword_db=keyword_db, ext_db=ext_db
                 )
             row["items"].append({"market": code, "category": cat, "step": step})
             _log(progress, f"{name} · {market_name} → {cat or '(없음)'} [{step}]")
@@ -1923,6 +1929,12 @@ def main(argv: list[str] | None = None) -> int:
         "--site-id",
         default=DEFAULT_SITE,
         help=f"상품수집사이트 (현재 {ALLOWED_SITES[0]} 만 허용)",
+    )
+    parser.add_argument(
+        "--region-type",
+        default="국내",
+        choices=["국내", "해외"],
+        help="국내/해외 구분 (기본: 국내)",
     )
     parser.add_argument(
         "--row-from",
@@ -1973,7 +1985,11 @@ def main(argv: list[str] | None = None) -> int:
     excels = load_market_excels_or_cache(paths)
 
     if args.dry_run:
-        run_dry([n.strip() for n in args.dry_run.split(",") if n.strip()], excels)
+        run_dry(
+            [n.strip() for n in args.dry_run.split(",") if n.strip()],
+            excels,
+            region_type=args.region_type,
+        )
         return 0
 
     markets = [m.strip().upper() for m in args.markets.split(",") if m.strip()] or None
@@ -1988,6 +2004,7 @@ def main(argv: list[str] | None = None) -> int:
         list_url=args.list_url,
         markets=markets,
         variant_choice=variant_choice,
+        region_type=args.region_type,
         row_from=args.row_from,
         row_to=args.row_to,
     )
