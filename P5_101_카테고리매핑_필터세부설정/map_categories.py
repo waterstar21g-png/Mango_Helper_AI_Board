@@ -361,6 +361,16 @@ def best_category_via_master(
     if not terms:
         terms = [parsed.raw]
 
+    # 모자 계열 필터에서 단독 '사파리' 검색어가 의류 사파리로 오인되는 것을 방지하기 위해 '사파리모자'/'사파리햇' 보강
+    if matching.class_of(filter_name) == "모자":
+        expanded_terms = []
+        for t in terms:
+            if t == "사파리":
+                expanded_terms.extend(["사파리모자", "사파리햇", "사파리"])
+            else:
+                expanded_terms.append(t)
+        terms = expanded_terms
+
     confident_by_idx: dict[int, tuple[str, str]] = {}
     forced_by_idx: dict[int, tuple[str, str]] = {}
     weak_only: tuple[str, str] | None = None
@@ -387,8 +397,13 @@ def best_category_via_master(
             # ★절대규칙(실사례): 필터명이 아동을 언급하지 않았는데 후보가 아동 카테고리면 배제
             if not filter_mentions_child and matching.is_child_category(path):
                 continue
-            label = f'{step} · 검색어="{term}"'
+            # ★품목 계열 불일치 배제 (모자 필터가 의류 사파리 자켓 등으로 새는 것 방지)
+            filter_cls = matching.class_of(filter_name)
             path_cls = matching.path_class(path)
+            if filter_cls and path_cls and filter_cls != path_cls and not matching.is_generic_path(path):
+                continue
+
+            label = f'{step} · 검색어="{term}"'
             is_weak = matching._is_non_product_hint(path) or (
                 term_cls and path_cls and term_cls != path_cls
             )

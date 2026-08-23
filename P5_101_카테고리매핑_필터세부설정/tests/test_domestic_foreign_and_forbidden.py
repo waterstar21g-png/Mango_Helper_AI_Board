@@ -251,3 +251,171 @@ def test_three_stage_verify_and_save_sequence():
         mc.close_popup = orig_close
 
 
+# ── 신규 11대 요건 검증 테스트 ──────────────────────────────────────
+
+
+def test_rule_1_jacket_synonyms():
+    """1. 자켓 = 재킷 상호동의어"""
+    cats = ["패션의류 > 남성의류 > 아우터 > 재킷", "생활 > 잡화 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-아우터-자켓", cats)
+    assert cat == "패션의류 > 남성의류 > 아우터 > 재킷"
+
+    cats2 = ["패션의류 > 남성의류 > 아우터 > 자켓", "생활 > 잡화 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-아우터-재킷", cats2)
+    assert cat2 == "패션의류 > 남성의류 > 아우터 > 자켓"
+
+
+def test_rule_2_maternity_excluded():
+    """2. 임부복 들어간 카테고리 매핑 제외"""
+    cats = ["여성의류 > 임부복 > 원피스", "여성의류 > 원피스 > 캐주얼원피스"]
+    cat, _ = mt.find_category("아름트리-무신사-여성-원피스-원피스", cats)
+    assert cat == "여성의류 > 원피스 > 캐주얼원피스"
+    assert "임부" not in cat
+
+
+def test_rule_3_sports_not_forbidden():
+    """3. '스포츠'가 들어간 단어는 카테고리 매핑 제외 대상 단어에 포함하지 말 것"""
+    cats = ["스포츠의류 > 트레이닝 > 트레이닝팬츠", "기타잡화 > 소품 > 파우치"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-하의-트레이닝팬츠", cats)
+    assert cat == "스포츠의류 > 트레이닝 > 트레이닝팬츠"
+
+
+def test_rule_4_women_clothing_priority():
+    """4. 여성의류 > 패션의류 > 패션의류잡화 우선순위 적용"""
+    cats = [
+        "패션의류잡화 > 여성 > 상의 > 니트",
+        "패션의류 > 여성 > 상의 > 니트",
+        "여성의류 > 상의 > 니트",
+    ]
+    cat, _ = mt.find_category("아름트리-무신사-여성-상의-니트", cats)
+    assert cat == "여성의류 > 상의 > 니트"
+
+
+def test_rule_5_casual_and_etc_generic_fallback():
+    """5. 캐쥬얼, 기타 등 단어는 가장 일반화된 범주로 간주"""
+    cats = [
+        "패션의류 > 남성의류 > 캐쥬얼의류",
+        "디지털 > 가전 > 기타",
+    ]
+    cat, _ = mt.find_category("아름트리-무신사-남성-상의-특이한이름", cats)
+    assert cat == "패션의류 > 남성의류 > 캐쥬얼의류"
+
+
+def test_rule_6_padding_jumper_safari_windbreaker_synonyms():
+    """6. 패딩, 점퍼, 패딩점퍼, 야상, 패딩다운, 사파리, 바람막이 등 유사동의어"""
+    cats = ["패션의류 > 아우터 > 야상", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-아우터-패딩", cats)
+    assert cat == "패션의류 > 아우터 > 야상"
+
+    cats2 = ["패션의류 > 아우터 > 바람막이", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-아우터-사파리", cats2)
+    assert cat2 == "패션의류 > 아우터 > 바람막이"
+
+
+def test_rule_7_cardigan_sweater_outing_synonyms():
+    """7. 가디건, 스웨터, 외출복 은 유사동의어"""
+    cats = ["패션의류 > 상의 > 스웨터", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-상의-가디건", cats)
+    assert cat == "패션의류 > 상의 > 스웨터"
+
+    cats2 = ["패션의류 > 상의 > 외출복", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-상의-스웨터", cats2)
+    assert cat2 == "패션의류 > 상의 > 외출복"
+
+
+def test_rule_8_suit_synonyms():
+    """8. 정장 = 수트 동일어"""
+    cats = ["패션의류 > 남성의류 > 수트", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-의류-정장", cats)
+    assert cat == "패션의류 > 남성의류 > 수트"
+
+
+def test_rule_9_dress_shoes_loafer_oxford_synonyms():
+    """9. 정장구두 = 로퍼 동의어 / 캐쥬얼구두 = 옥스퍼드 동의어"""
+    cats = ["신발 > 남성화 > 로퍼", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-신발-정장구두", cats)
+    assert cat == "신발 > 남성화 > 로퍼"
+
+    cats2 = ["신발 > 남성화 > 옥스퍼드", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-신발-캐쥬얼구두", cats2)
+    assert cat2 == "신발 > 남성화 > 옥스퍼드"
+
+
+def test_rule_10_mule_bloafer_casual_shoes_synonyms():
+    """10. 뮬 = 블로퍼 = 캐쥬얼구두 상호동의어"""
+    cats = ["신발 > 여성화 > 블로퍼", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-여성-신발-뮬", cats)
+    assert cat == "신발 > 여성화 > 블로퍼"
+
+    cats2 = ["신발 > 여성화 > 캐쥬얼구두", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-여성-신발-블로퍼", cats2)
+    assert cat2 == "신발 > 여성화 > 캐쥬얼구두"
+
+
+def test_rule_11_slipper_slipon_flipflop_beach_sandals():
+    """11. 슬리퍼 = 슬립온 = 플립플랍 = 수영장 샌들 = 비치 신발 동의어"""
+    cats = ["신발 > 남성화 > 플립플랍", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-신발-슬리퍼", cats)
+    assert cat == "신발 > 남성화 > 플립플랍"
+
+    cats2 = ["신발 > 남성화 > 수영장 샌들", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-신발-비치 신발", cats2)
+    assert cat2 == "신발 > 남성화 > 수영장 샌들"
+
+
+def test_rule_12_danwha_heels_mule_bloafer_synonyms():
+    """단화 = 하이힐(미들) = 하이힐(로우) = 뮬 = 블로퍼 동의어"""
+    cats = ["신발 > 여성화 > 하이힐(미들)", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-여성-신발-단화", cats)
+    assert cat == "신발 > 여성화 > 하이힐(미들)"
+
+    cats2 = ["신발 > 여성화 > 뮬", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-여성-신발-하이힐(로우)", cats2)
+    assert cat2 == "신발 > 여성화 > 뮬"
+
+    cats3 = ["신발 > 여성화 > 단화", "생활 > 기타"]
+    cat3, _ = mt.find_category("아름트리-무신사-여성-신발-블로퍼", cats3)
+    assert cat3 == "신발 > 여성화 > 단화"
+
+
+def test_rule_13_safari_sunshade_hat_fishing_hat_synonyms():
+    """사파리 = 햇빛가리개 = 햇 = 낚시모자 유사동의어"""
+    cats = ["패션잡화 > 모자 > 낚시모자", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-모자-사파리", cats)
+    assert cat == "패션잡화 > 모자 > 낚시모자"
+
+    cats2 = ["패션잡화 > 모자 > 햇빛가리개", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-모자-낚시모자", cats2)
+    assert cat2 == "패션잡화 > 모자 > 햇빛가리개"
+
+    cats3 = ["패션잡화 > 모자 > 사파리햇", "생활 > 기타"]
+    cat3, _ = mt.find_category("아름트리-무신사-남성-모자-햇빛가리개", cats3)
+    assert cat3 == "패션잡화 > 모자 > 사파리햇"
+
+
+def test_rule_14_beanie_headscarf_sunshade_synonyms():
+    """비니 = 머리수건 = 햇 = 햇볕가리개 유사동의어"""
+    cats = ["패션잡화 > 모자 > 머리수건", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-모자-비니", cats)
+    assert cat == "패션잡화 > 모자 > 머리수건"
+
+    cats2 = ["패션잡화 > 모자 > 햇볕가리개", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-모자-머리수건", cats2)
+    assert cat2 == "패션잡화 > 모자 > 햇볕가리개"
+
+
+def test_rule_15_cap_baseball_sports_hat_synonyms():
+    """모자 = 야구모자 = 스포트모자 동의어"""
+    cats = ["패션잡화 > 모자 > 스포트모자", "생활 > 기타"]
+    cat, _ = mt.find_category("아름트리-무신사-남성-모자-야구모자", cats)
+    assert cat == "패션잡화 > 모자 > 스포트모자"
+
+    cats2 = ["패션잡화 > 모자 > 야구모자", "생활 > 기타"]
+    cat2, _ = mt.find_category("아름트리-무신사-남성-모자-스포트모자", cats2)
+    assert cat2 == "패션잡화 > 모자 > 야구모자"
+
+
+
+
+
+
