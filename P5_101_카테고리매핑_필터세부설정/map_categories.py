@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import matching  # noqa: E402
 import category_db  # noqa: E402
 import keyword_dictionary  # noqa: E402
+import category_master_db  # noqa: E402
 import market_cache  # noqa: E402
 
 ProgressFn = Callable[[str], None]
@@ -313,6 +314,91 @@ def build_category_db(excels: dict[str, Sequence[str]]) -> category_db.CategoryD
     `find_category` 의 5) 단계(정보화DB 연관검색어)에서 쓴다.
     """
     return category_db.CategoryDB.build(excels)
+
+
+def build_master_db(*, refresh: bool = False) -> category_master_db.MasterDB:
+    """★요건(2026-08-23): "기존 DB를 대체하여 지금 주는 걸 활용" — 사용자가
+    제공한 CATEGORY_MASTER+KEYWORD_DICTIONARY CSV(`data/category_master.csv`
+    ·`data/keyword_dictionary.csv`, 6개 마켓 17,591건·25,399건)를 그대로
+    DB화한 것을 불러온다. JSON 캐시(`data/category_master_db.json`)가
+    있으면 그것부터 읽어(빠름) 매번 CSV를 다시 파싱하지 않는다.
+    """
+    return category_master_db.load(refresh=refresh)
+
+
+def best_category_via_master(
+    filter_name: str,
+    market_display_name: str,
+    master_db: category_master_db.MasterDB,
+    *,
+    exclude: Sequence[str] = (),
+) -> tuple[str, str]:
+    """★요건: 사용자 제공 마스터DB를 **1순위 기준**으로 최적 카테고리를 찾는다.
+
+    필터명을 하위(가장 구체적)부터 중위 순으로 뜯어 각 검색어마다
+    `MasterDB.resolve_ranked()` 로 여러 순위의 후보를 받는다 — CSV 의
+    Priority(1=완전일치·2=유사어·3=형태소분리) 로 확실하게 찾히면 그
+    즉시 확정한다. 앞 후보가 절대규칙(성별·브랜드·비제품)에 걸리면
+    같은 검색어의 다음 후보로, 그래도 없으면 다음 검색어로 넘어간다.
+    확실한 매칭이 전혀 없으면(전부 "4) 최근접 강제지정"뿐이면) 절대
+    규칙을 지키는 후보 중 첫 번째를 최후 수단으로 쓴다.
+
+    ★요건: 성별·브랜드는 예외 없는 절대규칙이다 — 이걸 지키는 후보가
+    정말 하나도 없으면, "미검출" 로 두고 `_map_once` 가 다음 단계
+    (기존 matching.py 캐스케이드)로 넘어가게 한다. 그것도 없을 때만
+    비로소 매핑 실패로 끝난다(오매핑보다 미매핑이 낫다는 절대규칙은
+    "미검출 금지"보다 우선한다). 비제품(건강용품 등)은 소프트 규칙 —
+    대안이 있으면 피하고, 없으면 그거라도 쓴다.
+    """
+    parsed = matching.parse_filter_name(filter_name)
+    gender = matching.gender_of(parsed.raw)
+    skip = {matching.normalize(e) for e in (exclude or []) if str(e or "").strip()}
+    terms = [t for t in [*parsed.lows, parsed.mid] if t]
+    if not terms:
+        terms = [parsed.raw]
+
+    confident: tuple[str, str] | None = None  # 확실한 매칭(1~3단계), 절대규칙 다 지킴
+    forced_fallback: tuple[str, str] | None = None  # 4단계 강제지정, 절대규칙 다 지킴
+    weak_only: tuple[str, str] | None = None  # 절대규칙은 지키지만 비제품·계열불일치뿐일 때
+
+    for term in terms:
+        term_cls = matching.class_of(term)
+        for cat_id, step in master_db.resolve_ranked(market_display_name, term, limit=10):
+            path = master_db.full_path(cat_id)
+            if not path or matching.normalize(path) in skip:
+                continue
+            if matching._contains_word(path, "브랜드"):
+                continue  # ★절대규칙(예외 없음): 브랜드 카테고리는 절대 확정하지 않는다
+            if gender and matching.violates_gender(path, filter_name):
+                continue  # ★절대규칙(예외 없음): 반대 성별 카테고리는 확정하지 않는다
+            label = f'{step} · 검색어="{term}"'
+            # ★소프트규칙: 건강용품·관리용품("건강목걸이") 이거나, 검색어의
+            #   품목 계열과 후보의 계열이 서로 다르면("목걸이" 액세서리 ↔
+            #   "목걸이 지갑" 가방) 대안이 있으면 피한다.
+            path_cls = matching.path_class(path)
+            is_weak = matching._is_non_product_hint(path) or (
+                term_cls and path_cls and term_cls != path_cls
+            )
+            if is_weak:
+                if weak_only is None:
+                    weak_only = (path, label)
+                continue
+            if step.startswith("4)"):
+                if forced_fallback is None:
+                    forced_fallback = (path, label)
+                continue
+            confident = (path, label)
+            break
+        if confident:
+            break
+
+    if confident:
+        return confident
+    if forced_fallback:
+        return forced_fallback
+    if weak_only:
+        return weak_only
+    return "", "미검출"
 
 
 def build_keyword_db(excels: dict[str, Sequence[str]]) -> keyword_dictionary.KeywordDB:
@@ -1130,6 +1216,7 @@ def map_one_market(
     retries: int = MAP_RETRIES,
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
+    master_db: category_master_db.MasterDB | None = None,
     progress: ProgressFn | None = None,
 ) -> MappedItem:
     """엑셀 확정 → 망고 제출을 **딱 한 번**만 한다.
@@ -1152,6 +1239,7 @@ def map_one_market(
         exclude=exclude,
         db=db,
         keyword_db=keyword_db,
+        master_db=master_db,
         progress=progress,
     )
 
@@ -1166,6 +1254,7 @@ def _map_once(
     exclude: Sequence[str] = (),
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
+    master_db: category_master_db.MasterDB | None = None,
     progress: ProgressFn | None = None,
 ) -> MappedItem:
     """한 마켓(+구분) 매핑 — 최적 카테고리 → 검색어 입력 → 검색 → 목록 선택."""
@@ -1176,9 +1265,24 @@ def _map_once(
     if variant and not select_variant(popup, market, variant, progress=progress):
         return MappedItem(market, "", 0.0, False, f"구분({variant}) 선택 실패")
 
-    category, step = best_category_with_step(
-        filter_name, categories, exclude=exclude, db=db, keyword_db=keyword_db
-    )
+    # ★요건(2026-08-23): 사용자 제공 마스터DB(CSV)를 1순위로 쓴다.
+    #   여기서 확실한 매칭(완전일치·유사어·형태소분리)을 못 찾을 때만
+    #   기존 matching.py 캐스케이드(db·keyword_db 포함)로 넘어간다.
+    category, step = "", ""
+    from_master = False
+    if master_db is not None:
+        market_name = MARKETS.get(market, market)
+        category, step = best_category_via_master(
+            filter_name, market_name, master_db, exclude=exclude
+        )
+        if category:
+            step = f"[마스터DB] {step}"
+            from_master = True
+
+    if not category:
+        category, step = best_category_with_step(
+            filter_name, categories, exclude=exclude, db=db, keyword_db=keyword_db
+        )
 
     # ★절대규칙: 반대 성별 카테고리는 고르지 않는다
     if category and matching.violates_gender(category, filter_name):
@@ -1188,9 +1292,13 @@ def _map_once(
         category, step = best_category_with_step(
             filter_name, safe, exclude=exclude, db=db, keyword_db=keyword_db
         )
+        from_master = False
 
-    # ★요건: 최적 카테고리는 **반드시 엑셀 목록 안의 값**이어야 한다
-    if category and not matching.is_from(categories, category):
+    # ★요건: 최적 카테고리는 반드시 실제 존재하는 값이어야 한다 — 마스터DB
+    #   에서 나온 값은 그 DB 가 이미 "이 마켓에 실존"함을 보증하므로,
+    #   (엑셀 목록과 표기가 다를 수 있어) 이 검사를 건너뛴다. 마스터DB가
+    #   없을 때(구 캐스케이드 결과)만 엑셀 목록 범위를 강제한다.
+    if category and not from_master and not matching.is_from(categories, category):
         fixed = matching.ensure_from(categories, category, filter_name)
         _log(progress, f"  {label}: 엑셀 범위 밖 → 목록 내 값으로 교정 ({fixed})")
         category, step = fixed, step + " · 엑셀범위 교정"
@@ -1309,6 +1417,7 @@ def map_one_row(
     variant_choice: dict[str, str] | None = None,
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
+    master_db: category_master_db.MasterDB | None = None,
     progress: ProgressFn | None = None,
 ) -> dict:
     """한 행 — 설정수정 팝업 → AI 매핑 → 마켓별 매핑 → 설정저장 → 닫기."""
@@ -1353,6 +1462,7 @@ def map_one_row(
                     variant=variant,
                     db=db,
                     keyword_db=keyword_db,
+                    master_db=master_db,
                     progress=progress,
                 )
                 if item.ok:
@@ -1379,6 +1489,7 @@ def map_one_row(
                             exclude=tried,
                             db=db,
                             keyword_db=keyword_db,
+                            master_db=master_db,
                             progress=progress,
                         )
                         if not item.ok:
@@ -1419,6 +1530,7 @@ def map_one_row(
                     variant=variant,
                     db=db,
                     keyword_db=keyword_db,
+                    master_db=master_db,
                     progress=progress,
                 )
                 record = dict(retry.__dict__)
@@ -1465,6 +1577,7 @@ def map_one_row(
                     exclude=[bad_name],
                     db=db,
                     keyword_db=keyword_db,
+                    master_db=master_db,
                     progress=progress,
                 )
                 record = dict(retry.__dict__)
@@ -1609,6 +1722,16 @@ def run_mapping(
         f"검색어 {len(keyword_db.keywords)}건",
         major=True,
     )
+    # ★요건(2026-08-23): 사용자 제공 CATEGORY_MASTER+KEYWORD_DICTIONARY
+    #   CSV 기반 마스터DB를 1순위 기준으로 구축(JSON 캐시가 있으면 그걸
+    #   읽어 빠르게 메모리에 올린다).
+    master_db = build_master_db()
+    _log(
+        progress,
+        f"마스터DB(CSV) 로드 — 카테고리 {len(master_db.categories)}건 · "
+        f"검색어 {len(master_db.keywords)}건",
+        major=True,
+    )
 
     try:
         import collect as p2  # noqa: WPS433
@@ -1674,6 +1797,7 @@ def run_mapping(
                     variant_choice=variant_choice,
                     db=db,
                     keyword_db=keyword_db,
+                    master_db=master_db,
                     progress=progress,
                 )
                 result.details.append(detail)
@@ -1706,13 +1830,21 @@ def run_dry(
     """브라우저 없이 매칭 결과만 확인 (검증용)."""
     db = build_category_db(excels)
     keyword_db = build_keyword_db(excels)
+    master_db = build_master_db()
     out: list[dict] = []
     for name in filter_names:
         row = {"filter": name, "items": []}
         for code, cats in excels.items():
-            cat, step = best_category_with_step(name, cats, db=db, keyword_db=keyword_db)
+            cat, step = "", ""
+            market_name = MARKETS.get(code, code)
+            if master_db is not None:
+                cat, step = best_category_via_master(name, market_name, master_db)
+                if cat:
+                    step = f"[마스터DB] {step}"
+            if not cat:
+                cat, step = best_category_with_step(name, cats, db=db, keyword_db=keyword_db)
             row["items"].append({"market": code, "category": cat, "step": step})
-            _log(progress, f"{name} · {MARKETS.get(code, code)} → {cat or '(없음)'} [{step}]")
+            _log(progress, f"{name} · {market_name} → {cat or '(없음)'} [{step}]")
         out.append(row)
     return out
 
