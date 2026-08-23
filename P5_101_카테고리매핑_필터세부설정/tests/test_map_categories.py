@@ -399,6 +399,7 @@ def test_map_one_market_touches_mango_exactly_once(monkeypatch):
         variant="",
         exclude=(),
         region_type="국내",
+        custom_search_keyword="",
         db=None,
         keyword_db=None,
         master_db=None,
