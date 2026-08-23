@@ -927,6 +927,68 @@ def test_low_search_multi_hit_disambiguated_by_top_or_mid():
     assert step.startswith("3) 우선순위")
 
 
+def test_prefers_canonical_group_over_incidental_leaf_match():
+    """★실사례(2026-08-22): "여성-상의-반소매 티셔츠" 필터가 "여성의류 >
+    마담의류 > 티셔츠"(무관한 이름의 중위 아래 우연히 걸린 리프)를 골라
+    "여성의류 > 티셔츠 > 라운드넥티셔츠"(검색어 자체가 중위명인, 이
+    품목의 정식 분류)를 놓쳤다. 정식 분류(중위명 자체가 검색어와 일치)
+    쪽을 우선해야 한다.
+    """
+    cats = [
+        "여성의류 > 마담의류 > 티셔츠",
+        "여성의류 > 티셔츠 > 라운드넥티셔츠",
+        "여성의류 > 티셔츠 > 폴라티셔츠",
+    ]
+    cat, step = mt.find_category("아름트리-무신사-여성-상의-반소매 티셔츠", cats)
+    assert cat.startswith("여성의류 > 티셔츠 >")
+    assert cat != "여성의류 > 마담의류 > 티셔츠"
+
+
+def test_canonical_group_bonus_is_one_directional():
+    """★"셔츠"(중위)가 "티셔츠"(검색어)의 부분 문자열이라는 이유만으로
+    부당하게 우대되면 안 된다 — 검색어가 그 중위명에 포함되는 방향만
+    인정한다."""
+    cats = [
+        "여성의류 > 셔츠 > 체크셔츠",
+        "여성의류 > 티셔츠 > 폴라티셔츠",
+    ]
+    cat, step = mt.find_category("아름트리-무신사-여성-상의-반소매 티셔츠", cats)
+    assert cat == "여성의류 > 티셔츠 > 폴라티셔츠"
+
+
+def test_matches_canonical_group_helper():
+    parsed = mt.parse_filter_name("아름트리-무신사-여성-상의-반소매 티셔츠")
+    assert mt._matches_canonical_group("여성의류 > 티셔츠 > 라운드넥티셔츠", parsed) is True
+    assert mt._matches_canonical_group("여성의류 > 마담의류 > 티셔츠", parsed) is False
+    assert mt._matches_canonical_group("여성의류 > 셔츠 > 체크셔츠", parsed) is False
+
+
+def test_find_category_uses_keyword_db_for_expansion():
+    """★요건: keyword_dictionary(ERD 연관검색어DB)도 5) 단계에서 실제로
+    쓰인다 — "만들어만 놓고 활용 안 한다"는 지적을 반영해 연결했다."""
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+    import keyword_dictionary as kd
+
+    # "캡모자"는 원본 리프에 없지만, keyword_dictionary 가 matching.py 의
+    # 기존 동의어 사전을 병합해 "야구모자"로 풀어준다.
+    kdb = kd.build(["패션잡화 > 남성 모자 > 야구모자"])
+    market_paths = ["패션잡화 > 남성 모자 > 야구모자"]
+    cat, step = mt.find_category(
+        "아름트리-무신사-남성-소품-캡모자", market_paths, keyword_db=kdb
+    )
+    assert cat == "패션잡화 > 남성 모자 > 야구모자"
+
+
+def test_find_category_without_keyword_db_still_works():
+    cat, step = mt.find_category(
+        "아름트리-무신사-남성-모자-비니", ["패션의류잡화 > 남성 > 모자 > 비니"]
+    )
+    assert cat == "패션의류잡화 > 남성 > 모자 > 비니"
+
+
 def test_low_search_multi_hit_disambiguated_by_domestic():
     """상위·중위로도 못 좁히면 국내(해외 아님) 카테고리를 OK 한다."""
     cats = [

@@ -399,7 +399,9 @@ def test_map_one_market_touches_mango_exactly_once(monkeypatch):
     monkeypatch.setattr(mc, "T_LIST", 100)
     calls: list[str] = []
 
-    def fake_once(popup, market, name, cats, *, variant="", exclude=(), db=None, progress=None):
+    def fake_once(
+        popup, market, name, cats, *, variant="", exclude=(), db=None, keyword_db=None, progress=None
+    ):
         cat, _ = mc.best_category_with_step(name, cats, exclude=exclude)
         calls.append(cat)
         return mc.MappedItem(market, cat, 1.0, False, "목록 선택 실패")
@@ -484,6 +486,21 @@ def test_run_dry_reports_per_market():
     assert out[0]["items"][0]["market"] == "AUC20"
     assert out[0]["items"][0]["category"].endswith("비니")
     assert any("옥션2.0" in l for l in logs)
+
+
+def test_build_keyword_db_from_excels():
+    """★요건: 연관검색어DB(keyword_dictionary)가 실제 실행 경로에 연결돼
+    있는지 — 만들어만 두고 안 쓰인다는 지적을 반영해 추가한 검증."""
+    kdb = mc.build_keyword_db({"AUC20": AUCTION})
+    assert len(kdb.categories) > 0
+    assert len(kdb.keywords) > 0
+
+
+def test_run_dry_builds_and_uses_keyword_db():
+    """`run_dry` 가 `build_keyword_db` 를 호출해 `best_category_with_step`
+    에 실제로 전달하는지(예외 없이 끝까지 도는지) 확인."""
+    out = mc.run_dry(["남성 비니"], {"AUC20": AUCTION})
+    assert out[0]["items"][0]["category"]
 
 
 def test_market_input_ids_match_screenshots():
@@ -973,7 +990,7 @@ def test_map_one_market_blocks_opposite_gender(monkeypatch):
     excel = ["남성패션 > 모자 > 비니", "여성패션 > 모자 > 비니"]
     calls = {"n": 0}
 
-    def fake_best(name, cats, *, exclude=(), db=None):
+    def fake_best(name, cats, *, exclude=(), db=None, keyword_db=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return "남성패션 > 모자 > 비니", "테스트"      # 규칙 위반 값

@@ -365,10 +365,40 @@ NEUTRAL_GENDER_WORDS = ("중성", "혼용", "공용", "유니섹스", "남녀")
 OVERSEAS_WORDS = ("해외", "역직구", "해외직구")
 
 
+def _matches_canonical_group(path: str, parsed: "ParsedFilter") -> bool:
+    """★실사례(2026-08-23): "여성-상의-반소매 티셔츠" 필터가 "여성의류 >
+    마담의류 > 티셔츠"(무관한 이름의 중위 아래 우연히 걸린 리프)를 골라
+    "여성의류 > 티셔츠 > 맨투맨/라운드넥 등"(검색어 자체가 중위명인,
+    이 품목의 정식 분류)을 놓친 사고를 막는다.
+
+    경로의 **리프를 뺀 나머지 단계** 중 하나가 하위(검색어) 이름과 직접
+    일치하면, 그 카테고리 그룹이 이 품목의 "정식 소속 분류"일 가능성이
+    높다고 보고 우대한다 — 검색어가 어쩌다 리프에만 걸리고 중위는
+    전혀 무관한 이름인 경로보다 이런 경로를 우선한다.
+    """
+    levels = split_levels(path)
+    if len(levels) < 2:
+        return False
+    non_leaf = levels[:-1]
+    # ★한 방향으로만 본다 — 검색어(하위)가 그 단계 이름에 포함돼야 한다.
+    #   반대 방향(레벨이 검색어에 포함)까지 허용하면 "셔츠"(레벨)가
+    #   "티셔츠"(검색어)의 부분 문자열이라는 이유만으로 셔츠·티셔츠가
+    #   서로 뒤섞이는 사고가 난다("체크셔츠" 가 "반소매 티셔츠" 검색에
+    #   부당하게 우대되던 실사례).
+    return any(
+        normalize(name) and normalize(name) in normalize(lv)
+        for lv in non_leaf
+        for name in parsed.lows
+        if name
+    )
+
+
 def priority_rank(path: str, parsed: "ParsedFilter") -> int:
     """값이 클수록 우선 — 동점일 때 최종 선택 순서를 가른다."""
     gender = gender_of(parsed.raw)
     score = 0
+    if _matches_canonical_group(path, parsed):
+        score += 6
     if gender:
         # 성별 정확 일치가 중성/혼용/공용보다, 그리고(자동으로) 성별 무관한
         # 활동명(골프·낚시·스포츠 등)만 일치하는 경로보다 항상 우선한다.
@@ -889,6 +919,7 @@ def find_category(
     exclude: Sequence[str] = (),
     force: bool = True,
     db=None,
+    keyword_db=None,
 ) -> tuple[str, str]:
     """최적("최종") 카테고리와 그 근거 단계 — 요건재정의(2026-08-22) D 항 그대로.
 
@@ -911,6 +942,10 @@ def find_category(
 
     `exclude` 는 이미 시도한 카테고리. `db` 는 `category_db.CategoryDB` —
     5) 단계에서 연관검색어를 찾는 데 쓴다(없으면 5) 단계는 건너뛴다).
+    `keyword_db` 는 `keyword_dictionary.KeywordDB`("최신성 우선" 원칙에
+    따라 연관검색어DB의 공식 기준) — 같은 5) 단계에서 `resolve()` 로
+    검색어를 카테고리명으로 확정해 확장 후보에 더한다. 둘 다 없어도
+    (기본값) 이전처럼 동작한다(하위호환).
     """
     parsed = parse_filter_name(name)
     skip = {normalize(e) for e in (exclude or []) if str(e or "").strip()}
@@ -1019,7 +1054,7 @@ def find_category(
         #   같은 흔한 말이 섞여 들어오면(예: "남성 모자"를 쪼개면 "모자"가
         #   나온다) 중위 검색이 도로 무관한 후보를 쓸어담는다. 확장범주(4)
         #   단계가 이미 그 넓히기 역할을 전담한다.
-        if db is None:
+        if db is None and keyword_db is None:
             break
         new_low_terms: list[str] = []
         for term in [*low_terms, *mid_terms]:
@@ -1027,20 +1062,34 @@ def find_category(
             if not term or key in tried_db_terms:
                 continue
             tried_db_terms.add(key)
-            for related, priority in db.related(term):
-                if priority != 1:
-                    continue
-                # ★단순 토큰화만 쓴다("/" · 공백 구분) — `segment_variants` 의
-                #   반쪽-분해(halves)까지 적용하면 "야구모자"(4자)가 "야구"+
-                #   "모자"로 갈라져, 흔한 말 "모자"가 다시 검색어에 섞여
-                #   무관한 후보까지 쓸어담는다.
-                add_related = related.strip()
-                if add_related and add_related not in low_terms and add_related not in new_low_terms:
-                    new_low_terms.append(add_related)
-                for word in _SPLIT.split(related):
-                    word = word.strip()
-                    if word and word not in low_terms and word not in new_low_terms:
-                        new_low_terms.append(word)
+            if db is not None:
+                for related, priority in db.related(term):
+                    if priority != 1:
+                        continue
+                    # ★단순 토큰화만 쓴다("/" · 공백 구분) — `segment_variants` 의
+                    #   반쪽-분해(halves)까지 적용하면 "야구모자"(4자)가 "야구"+
+                    #   "모자"로 갈라져, 흔한 말 "모자"가 다시 검색어에 섞여
+                    #   무관한 후보까지 쓸어담는다.
+                    add_related = related.strip()
+                    if add_related and add_related not in low_terms and add_related not in new_low_terms:
+                        new_low_terms.append(add_related)
+                    for word in _SPLIT.split(related):
+                        word = word.strip()
+                        if word and word not in low_terms and word not in new_low_terms:
+                            new_low_terms.append(word)
+            if keyword_db is not None:
+                # ★keyword_dictionary(ERD 기준 연관검색어DB) 로도 이 검색어를
+                #   확정해 본다 — SY(동의어)·MO(형태소분리) 사전이 이 검색어를
+                #   다른 카테고리명으로 풀 수 있으면, 그 카테고리명을 검색어
+                #   확장 후보로 더한다.
+                cat_id, _step = keyword_db.resolve(term)
+                if cat_id:
+                    resolved_name = keyword_db.full_path(cat_id)
+                    leaf_name = leaf_of(resolved_name) or resolved_name
+                    for word in [leaf_name, *_SPLIT.split(leaf_name)]:
+                        word = word.strip()
+                        if word and word not in low_terms and word not in new_low_terms:
+                            new_low_terms.append(word)
         if not new_low_terms:
             break
         low_terms = [*low_terms, *new_low_terms]
