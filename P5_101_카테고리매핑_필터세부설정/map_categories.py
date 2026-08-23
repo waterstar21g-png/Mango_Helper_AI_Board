@@ -588,19 +588,12 @@ def best_category_with_step(
 
 
 def search_keyword_for(category_path: str) -> str:
-    """카테고리 검색필드에 넣을 검색어 — ★확정된 카테고리명 전체.
+    """카테고리 검색필드에 넣을 검색어 — ★확정된 카테고리명 전체(단계별 공백 한 칸).
 
     ★요건: 엑셀은 망고 마켓별 전체 카테고리를 그대로 내려받은 것이라,
-    엑셀에서 확정한 값은 망고에도 100% 존재한다. 검색어를 리프(마지막
-    단계) 하나만 넣으면 같은 리프를 쓰는 다른 상위 카테고리까지 여러 개
-    걸려 나온다 — 확정된 전체 이름으로 검색해야 그 마켓 안에서 유일하게
-    하나만 나온다. 망고에서는 검색·선택이 아니라 확정된 값을 그대로
-    "제출"하는 것뿐이다.
-
-    ★요건: 상위·중위·하위·세부·상세 단계를 묶어 검색할 때, 단계 사이에
-    공백을 **한 글자씩** 두고 입력한다.
-    예) "남자-하의-팬츠-한무-두모" → "남자 하의 팬츠 한무 두모"
-    (내부 표기의 " > " 구분자를 공백 하나로 바꾼다.)
+    엑셀에서 확정한 값은 망고에도 100% 존재한다.
+    상위·중위·하위·세부·상세 단계를 묶어 검색할 때 단계 사이에 공백을 한 글자씩 두고 입력한다.
+    예) "남성의류 > 반팔티셔츠 > 카라 반팔티" → "남성의류 반팔티셔츠 카라 반팔티"
     """
     levels = [p.strip() for p in str(category_path or "").split(">") if p.strip()]
     return " ".join(levels)
@@ -620,6 +613,9 @@ def pick_option(options: Sequence[str], category_path: str) -> str:
         if str(opt or "").strip() and norm(opt) == norm(target):
             return opt
     return ""
+
+    # 4. 무조건 첫 번째 유효 항목 선택 (미매핑/비움 절대 방지)
+    return valid_opts[0]
 
 
 # ── 화면 조작 ────────────────────────────────────────────────────
@@ -1278,6 +1274,29 @@ CHOOSE_OPTION_JS = """
 """
 
 
+def choose_first_and_only_option(popup, market: str, *, select_id: str = "") -> str:
+    """★요건: 엑셀에서 찾은 확정 카테고리로 검색하면 망고 목록에는 항상 그 항목 1개뿐이다.
+
+    검색 후 select 리스트박스에 로드된 유일한 결과 항목을 바로 선택하고,
+    화면 hidden 필드(openmarket_cm_category_<코드>)에 동기화한다.
+    """
+    ids = [select_id] if select_id else result_select_ids(market)
+    for sid in ids:
+        loc = _first(popup, (f"#{sid}",))
+        if loc is None:
+            continue
+        try:
+            res = popup.evaluate(CHOOSE_OPTION_JS, [sid, "", market])
+            if res:
+                name_el = popup.evaluate(
+                    f"() => {{ const el = document.getElementsByName('openmarket_cm_category_name_{market}')[0]; return el ? el.value : ''; }}"
+                )
+                return str(name_el or "").strip()
+        except Exception:
+            continue
+    return ""
+
+
 def choose_option(popup, market: str, label: str, *, select_id: str = "") -> bool:
     ids = [select_id] if select_id else result_select_ids(market)
     for sid in ids:
@@ -1340,6 +1359,7 @@ def map_one_market(
     exclude: Sequence[str] = (),
     retries: int = MAP_RETRIES,
     region_type: str = "국내",
+    custom_search_keyword: str = "",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
     master_db: category_master_db.MasterDB | None = None,
@@ -1355,6 +1375,7 @@ def map_one_market(
         variant=variant,
         exclude=exclude,
         region_type=region_type,
+        custom_search_keyword=custom_search_keyword,
         db=db,
         keyword_db=keyword_db,
         master_db=master_db,
@@ -1372,6 +1393,7 @@ def _map_once(
     variant: str = "",
     exclude: Sequence[str] = (),
     region_type: str = "국내",
+    custom_search_keyword: str = "",
     db: category_db.CategoryDB | None = None,
     keyword_db: keyword_dictionary.KeywordDB | None = None,
     master_db: category_master_db.MasterDB | None = None,
@@ -1455,75 +1477,39 @@ def _map_once(
 
     box = market_search_input(popup, market)
     if box is None:
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
-    # 검색어 다단계 목록 구성 (전체 경로 -> 리프 -> 필터명 하위/중위 -> 품목어)
-    search_terms: list[str] = []
-    k_full = search_keyword_for(category)
-    if k_full:
-        search_terms.append(k_full)
-    k_leaf = category.split(">")[-1].strip()
-    if k_leaf and k_leaf not in search_terms:
-        search_terms.append(k_leaf)
+    # ★검색어 설정: 지정된 custom_search_keyword 가 있으면 그것을 사용(예: 해외탭에 "의류" 또는 "해외명품"), 없으면 최종 카테고리명
+    keyword = custom_search_keyword.strip() if custom_search_keyword else search_keyword_for(category)
+    try:
+        box.fill(keyword, timeout=T_CLICK)
+    except Exception as e:  # noqa: BLE001
+        clear_market_category(popup, market, progress=progress)
+        return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
 
-    parsed = matching.parse_filter_name(filter_name)
-    for low in parsed.lows:
-        if low and low not in search_terms:
-            search_terms.append(low)
-    for mid in parsed.mids:
-        if mid and mid not in search_terms:
-            search_terms.append(mid)
+    if not click_market_search(popup, market):
+        clear_market_category(popup, market, progress=progress)
+        return MappedItem(market, category, score, False, "검색 버튼 미검출")
 
-    cls = matching.class_of(filter_name)
-    if cls and cls not in search_terms:
-        search_terms.append(cls)
-
-    for w in ("티셔츠", "셔츠", "바지", "팬츠", "신발", "모자", "가방", "의류", "잡화", "패션"):
-        if w not in search_terms and (cls == w or w in filter_name or w in category):
-            search_terms.append(w)
-
-    options: list[str] = []
-    select_id: str = ""
-    used_term: str = ""
-
-    for st in search_terms:
-        try:
-            box.fill(st, timeout=T_CLICK)
-            click_market_search(popup, market)
-            opts, sid = read_result_options(popup, market)
-            if opts:
-                options = opts
-                select_id = sid
-                used_term = st
-                break
-        except Exception:
-            continue
-
-    if not options:
-        # 마지막으로 기본 검색어로 옵션 로드 시도
-        for fallback_kw in ("", "패션", "의류", "신발", "잡화", "기타"):
-            try:
-                box.fill(fallback_kw, timeout=T_CLICK)
-                click_market_search(popup, market)
-                opts, sid = read_result_options(popup, market, timeout_ms=2000)
-                if opts:
-                    options = opts
-                    select_id = sid
-                    used_term = fallback_kw
-                    break
-            except Exception:
-                continue
-
+    options, select_id = read_result_options(popup, market)
     if not options:
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
+    # 결과 목록에서 항목 선택
     picked = pick_option(options, category)
+    if not picked and custom_search_keyword and options:
+        # custom_search_keyword 로 검색하여 임의의 리스트로 저장하는 경우 첫 번째 유효 옵션 선택
+        valid_opts = [o for o in options if o and not o.startswith("-") and not "선택해주세요" in o]
+        if valid_opts:
+            picked = valid_opts[0]
+
     if not picked or not choose_option(popup, market, picked, select_id=select_id):
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "동일한 검색결과 없음")
 
-    _log(progress, f"  {label}: 선택 완료 → {picked} (검색어='{used_term}')")
+    _log(progress, f"  {label}: 선택 완료 → {picked}")
     return MappedItem(market, picked, score, True, step)
 
 
@@ -1638,10 +1624,74 @@ def map_one_row(
 
     try:
         # ── [1단계: 최초 등록 & 저장] ───────────────────────────────────
-        _log(progress, "  [1차: 최초] 6개 마켓 카테고리 매핑", major=True)
+        _log(progress, f"  [1차: 최초] 6개 마켓 카테고리 매핑 (구분: {region_type})", major=True)
         for market in codes:
             if stop_requested():
                 break
+
+            # ★요건 2026-08-23 (11번가, 롯데ON 라디오 구분 순서 및 검색어 규칙):
+            # A. 입력필드 구분이 "국내"로 선택된 경우:
+            #    1. 해외 또는 해외직구 :: 라디오 선택 후 => "의류" 검색 후 임의의 리스트로 저장 (ALT+S)
+            #    2. 국내 또는 일반 :: 라디오 선택 후 => "최종 카테고리명" 입력 검색 후 저장 (ALT+S)
+            # B. 입력필드 구분이 "해외"로 선택된 경우:
+            #    1. 해외 또는 해외직구 :: 라디오 선택 후 => "해외명품" 검색 후 임의의 리스트로 저장 (ALT+S)
+            #    2. 국내 또는 일반 :: 라디오 선택 후 => "최종 카테고리명" 입력 검색 후 저장 (ALT+S)
+            if market in ("11ST", "LTON"):
+                if market == "11ST":
+                    overseas_v, domestic_v = "해외카테고리", "국내카테고리"
+                else:
+                    overseas_v, domestic_v = "해외직구 카테고리", "일반카테고리"
+
+                # 1. 해외 탭 처리
+                kw_for_overseas = "의류" if region_type == "국내" else "해외명품"
+                _log(progress, f"  {MARKETS.get(market, market)}: 1단계 [{overseas_v}] 라디오 선택 → '{kw_for_overseas}' 검색 후 저장")
+                item_ov = map_one_market(
+                    popup,
+                    market,
+                    row.filter_name,
+                    excels.get(market, []),
+                    variant=overseas_v,
+                    region_type=region_type,
+                    custom_search_keyword=kw_for_overseas,
+                    db=db,
+                    keyword_db=keyword_db,
+                    master_db=master_db,
+                    ext_db=ext_db,
+                    progress=progress,
+                )
+                if item_ov.ok:
+                    click_config_save(popup, progress=progress)
+                record_ov = dict(item_ov.__dict__)
+                record_ov["variant"] = overseas_v
+                record_ov["stage"] = "1차_해외탭"
+                detail["items"].append(record_ov)
+                time.sleep(GAP)
+
+                # 2. 국내/일반 탭 처리
+                _log(progress, f"  {MARKETS.get(market, market)}: 2단계 [{domestic_v}] 라디오 선택 → '최종 카테고리명' 검색 후 저장")
+                item_dom = map_one_market(
+                    popup,
+                    market,
+                    row.filter_name,
+                    excels.get(market, []),
+                    variant=domestic_v,
+                    region_type=region_type,
+                    custom_search_keyword="",  # 최종 카테고리명 사용
+                    db=db,
+                    keyword_db=keyword_db,
+                    master_db=master_db,
+                    ext_db=ext_db,
+                    progress=progress,
+                )
+                if item_dom.ok:
+                    click_config_save(popup, progress=progress)
+                record_dom = dict(item_dom.__dict__)
+                record_dom["variant"] = domestic_v
+                record_dom["stage"] = "1차_국내탭"
+                detail["items"].append(record_dom)
+                time.sleep(GAP)
+                continue
+
             for variant in variants_for(market, (variant_choice or {}).get(market, "")):
                 if stop_requested():
                     break
@@ -1715,14 +1765,18 @@ def map_one_row(
             for market in missing_2:
                 if stop_requested():
                     break
-                variant = variants_for(market, (variant_choice or {}).get(market, ""))[0]
+                if market in ("11ST", "LTON"):
+                    v = "국내카테고리" if market == "11ST" else "일반카테고리"
+                else:
+                    v = variants_for(market, (variant_choice or {}).get(market, ""))[0]
                 retry2 = map_one_market(
                     popup,
                     market,
                     row.filter_name,
                     excels.get(market, []),
-                    variant=variant,
+                    variant=v,
                     region_type=region_type,
+                    custom_search_keyword="",
                     db=db,
                     keyword_db=keyword_db,
                     master_db=master_db,
@@ -1730,7 +1784,7 @@ def map_one_row(
                     progress=progress,
                 )
                 record2 = dict(retry2.__dict__)
-                record2["variant"] = variant
+                record2["variant"] = v
                 record2["stage"] = "2차_등록"
                 detail["items"].append(record2)
                 time.sleep(GAP)
@@ -1752,14 +1806,18 @@ def map_one_row(
             for market in missing_3:
                 if stop_requested():
                     break
-                variant = variants_for(market, (variant_choice or {}).get(market, ""))[0]
+                if market in ("11ST", "LTON"):
+                    v = "국내카테고리" if market == "11ST" else "일반카테고리"
+                else:
+                    v = variants_for(market, (variant_choice or {}).get(market, ""))[0]
                 retry3 = map_one_market(
                     popup,
                     market,
                     row.filter_name,
                     excels.get(market, []),
-                    variant=variant,
+                    variant=v,
                     region_type=region_type,
+                    custom_search_keyword="",
                     db=db,
                     keyword_db=keyword_db,
                     master_db=master_db,
@@ -1767,7 +1825,7 @@ def map_one_row(
                     progress=progress,
                 )
                 record3 = dict(retry3.__dict__)
-                record3["variant"] = variant
+                record3["variant"] = v
                 record3["stage"] = "3차_등록"
                 detail["items"].append(record3)
                 time.sleep(GAP)
