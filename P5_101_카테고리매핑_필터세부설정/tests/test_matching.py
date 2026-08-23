@@ -963,6 +963,78 @@ def test_matches_canonical_group_helper():
     assert mt._matches_canonical_group("여성의류 > 셔츠 > 체크셔츠", parsed) is False
 
 
+def test_path_class_ignores_top_level_compound_bucket_name():
+    """★실사례(2026-08-23): "의류/언더웨어 > 남성언더웨어 > 드로즈/트렁크"
+    가 최상위 "의류/언더웨어"의 "의류" 글자 때문에 "의류" 계열로 잘못
+    분류돼 "속옷" 검색에서 통째로 배제되던 버그. 최상위를 뺀 나머지로
+    먼저 판정해야 한다."""
+    assert mt.path_class("의류/언더웨어 > 남성언더웨어 > 드로즈/트렁크") != "의류"
+
+
+def test_underwear_class_recognizes_market_vocabulary():
+    """CLASS_WORDS 속옷 목록이 실제 마켓 표기(언더웨어·드로즈·팬티 등)를 담아야 한다."""
+    for word in ("언더웨어", "드로즈", "팬티", "트렁크"):
+        assert mt.class_of(word) == "속옷", f"{word} 가 속옷 계열로 분류되지 않음"
+
+
+def test_underwear_filter_does_not_cross_into_shoe_class():
+    """★실사례: "남성-속옷-드로즈" 검색이 "남성화"(신발) 계열로 새면 안 된다."""
+    cats = [
+        "패션잡화 > 남성화 > 기타신발",
+        "의류/언더웨어 > 남성언더웨어 > 드로즈/트렁크",
+    ]
+    cat, step = mt.find_category("아름트리-무신사-남성-속옷-드로즈", cats)
+    assert cat == "의류/언더웨어 > 남성언더웨어 > 드로즈/트렁크"
+
+
+def test_gender_paths_keeps_genderless_candidates():
+    """★실사례: 성별 표기가 있는 후보가 있어도, 성별 표기가 아예 없는
+    (반대 성별이 아닌) 후보를 통째로 배제하면 안 된다 — "스니커즈"처럼
+    성별 구분 없이 등록된 정확한 리프가 사라져 엉뚱한 성별-표기 후보
+    (예: "남성샌들 > 아쿠아슈즈")가 선택되는 사고로 이어졌다."""
+    cats = ["남성패션 > 모자 > 비니", "잡화 > 모자 > 정확한대상"]
+    kept = mt.gender_paths(cats, "남성")
+    assert "잡화 > 모자 > 정확한대상" in kept
+
+
+def test_sneaker_filter_prefers_exact_genderless_leaf_over_wrong_gendered_sibling():
+    """★실사례(AUC20 재현): "남성-신발-스니커즈" 가 성별 무표기의 정확한
+    "스니커즈" 리프 대신, 성별은 맞지만 품목이 다른("남성샌들 >
+    아쿠아슈즈") 형제를 고르면 안 된다."""
+    cats = [
+        "신발 > 남성샌들 > 아쿠아슈즈",
+        "신발 > 스니커즈/슬립온 > 스니커즈",
+    ]
+    cat, step = mt.find_category("아름트리-무신사-남성-신발-스니커즈", cats)
+    assert cat == "신발 > 스니커즈/슬립온 > 스니커즈"
+
+
+def test_dress_shoes_synonym_bridges_gendered_market_vocabulary():
+    """★실사례: "구두"는 마켓 표기상 남성 쪽 용어이고, 여성 쪽 동일
+    개념은 "단화"로 불린다 — 이 용어차를 이어준다."""
+    cats = ["신발 > 여성단화 > 로퍼", "신발 > 여성샌들 > 뮬"]
+    cat, step = mt.find_category("아름트리-무신사-여성-신발-구두", cats)
+    assert cat == "신발 > 여성단화 > 로퍼"
+
+
+def test_non_product_hint_excludes_health_and_care_products():
+    """★실사례: "건강목걸이"(건강용품)·"구두약"(관리용품) 처럼 품목명은
+    담고 있지만 실제로는 그 품목이 아닌 카테고리는 대안이 있으면
+    고르지 않는다."""
+    cats = [
+        "건강/의료용품 > 기타건강관리용품 > 건강목걸이",
+        "쥬얼리/시계 > 남성용쥬얼리 > 목걸이",
+    ]
+    cat, step = mt.find_category("아름트리-무신사-남성-악세서리-목걸이", cats)
+    assert cat == "쥬얼리/시계 > 남성용쥬얼리 > 목걸이"
+
+
+def test_non_product_hint_helper():
+    assert mt._is_non_product_hint("건강/의료용품 > 기타건강관리용품 > 건강목걸이") is True
+    assert mt._is_non_product_hint("신발 > 신발용품 > 구두약/염색제") is True
+    assert mt._is_non_product_hint("쥬얼리/시계 > 남성용쥬얼리 > 목걸이") is False
+
+
 def test_find_category_uses_keyword_db_for_expansion():
     """★요건: keyword_dictionary(ERD 연관검색어DB)도 5) 단계에서 실제로
     쓰인다 — "만들어만 놓고 활용 안 한다"는 지적을 반영해 연결했다."""

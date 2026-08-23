@@ -125,7 +125,15 @@ CLASS_WORDS: dict[str, tuple[str, ...]] = {
     "가방": ("가방", "백팩", "크로스백", "토트백", "숄더백", "지갑"),
     "액세서리": ("액세서리", "주얼리", "목걸이", "귀걸이", "반지", "팔찌", "브로치"),
     # ★"속옷/홈웨어" 하위 카테고리(다른 이름)
-    "속옷": ("속옷", "홈웨어", "여성속옷상의", "여성속옷하의", "여성속옷세트"),
+    "속옷": (
+        "속옷", "홈웨어", "여성속옷상의", "여성속옷하의", "여성속옷세트",
+        # ★실사례: "언더웨어"(마켓 표기)·"드로즈"·"팬티"·"트렁크" 등이
+        # 없어서 "남성-속옷-드로즈" 검색이 통째로 다른 계열(신발 등)로
+        # 새던 문제 — 실제 마켓 표기를 더 담는다.
+        "언더웨어", "이너웨어", "내의", "드로즈", "트렁크", "팬티",
+        "삼각팬티", "사각팬티", "브리프", "런닝", "내복", "보정속옷",
+        "브라", "브래지어",
+    ),
     # ★"뷰티" 하위 카테고리(다른 이름) — 필터명에 이 중 하나만 있어도
     #   "뷰티" 계열로 인식해 의류·신발 등 다른 계열과 섞이지 않게 한다.
     "뷰티": (
@@ -170,6 +178,11 @@ ITEM_SYNONYMS: dict[str, tuple[str, ...]] = {
     "안경테": ("안경테", "안경", "아이웨어"),
     "스니커즈": ("스니커즈", "운동화", "캔버스화"),
     "슬리퍼": ("슬리퍼", "샌들", "쪼리"),
+    # ★실사례: "구두"는 마켓 표기상 주로 남성 쪽에서만 쓰이고, 여성
+    # 쪽의 동일 개념은 "단화"로 불린다(로퍼·옥스포드화·플랫슈즈 등이
+    # 전부 "단화" 그룹 아래 있음) — 이 용어차를 메운다.
+    "구두": ("구두", "단화", "정장구두", "드레스슈즈"),
+    "단화": ("단화", "구두", "로퍼", "플랫슈즈"),
     "가방": ("가방", "백팩", "크로스백", "토트백"),
     "지갑": ("지갑", "카드지갑", "머니클립"),
     "목도리": ("목도리", "머플러", "스카프"),
@@ -190,6 +203,23 @@ PURPOSE_WORDS = (
 
 def normalize(text: str) -> str:
     return "".join(str(text or "").split()).lower()
+
+
+def _build_class_words_norm() -> dict[str, tuple[tuple[str, int], ...]]:
+    """★성능(실사례 2026-08-23): `class_of` 는 후보마다 계열 단어 전부를
+    다시 `normalize` 하고 있었다 — 마켓 카테고리가 1만 건대면 이 정규화
+    호출만 수백만 번 일어나 `find_category` 한 번에 0.5초 가까이
+    걸렸다. `CLASS_WORDS` 는 고정값이므로 모듈 로드 시 **한 번만**
+    정규화해 둔다.
+    """
+    out: dict[str, tuple[tuple[str, int], ...]] = {}
+    for cls, words in CLASS_WORDS.items():
+        pairs = tuple((normalize(w), len(normalize(w))) for w in words if normalize(w))
+        out[cls] = pairs
+    return out
+
+
+_CLASS_WORDS_NORM = _build_class_words_norm()
 
 
 def split_levels(path: str) -> list[str]:
@@ -400,11 +430,16 @@ def priority_rank(path: str, parsed: "ParsedFilter") -> int:
     if _matches_canonical_group(path, parsed):
         score += 6
     if gender:
-        # 성별 정확 일치가 중성/혼용/공용보다, 그리고(자동으로) 성별 무관한
-        # 활동명(골프·낚시·스포츠 등)만 일치하는 경로보다 항상 우선한다.
+        # 성별 정확 일치가 중성/혼용/공용·무표기보다, 그리고(자동으로)
+        # 성별 무관한 활동명(골프·낚시·스포츠 등)만 일치하는 경로보다
+        # 항상 우선한다. ★무표기(성별 글자가 아예 없는 경로)도 명시적
+        # "공용/중성"과 동급으로 본다 — 실제 마켓 데이터는 성별 구분이
+        # 필요 없는 품목(예: "스니커즈")에 성별 표기를 아예 안 붙이는
+        # 경우가 흔한데, 이걸 무표기라고 감점하면 정확한 정식 분류가
+        # 밀리고 반대로 품목이 안 맞는 성별-표기 후보가 이겨버린다.
         if has_gender(path, gender):
             score += 100
-        elif any(normalize(w) in normalize(path) for w in NEUTRAL_GENDER_WORDS):
+        elif any(normalize(w) in normalize(path) for w in NEUTRAL_GENDER_WORDS) or not gender_of(path):
             score += 40
         gendered_clothing = f"{gender}의류"
         if path_hit(path, gendered_clothing):
@@ -541,8 +576,34 @@ SPECIFIC_ITEM_WORDS: dict[str, tuple[str, ...]] = {
         "네일", "프레그런스", "선케어", "클렌징", "필링", "헤어케어", "바디케어",
         "쉐이빙", "제모",
     ),
-    "속옷": ("홈웨어", "여성속옷상의", "여성속옷하의", "여성속옷세트"),
+    "속옷": (
+        "홈웨어", "여성속옷상의", "여성속옷하의", "여성속옷세트",
+        "언더웨어", "드로즈", "트렁크", "팬티", "삼각팬티", "사각팬티",
+        "브리프", "런닝", "내복", "보정속옷", "브라", "브래지어",
+    ),
 }
+
+# ★DB화 — 품목명(신발·목걸이 등)을 담고 있지만 실제로는 그 품목 자체가
+# 아니라 건강용품·관리용품인 카테고리 — 형제 품목처럼 배제한다.
+#   예) "건강목걸이"(자기요법 건강용품, 패션 목걸이 아님) · "구두약"
+#   (관리용품, 구두 자체가 아님) · "목걸이 지갑"(지갑, 목걸이 아님)
+NON_PRODUCT_HINT_WORDS = (
+    "건강", "관리용품", "케어", "클리너", "탈취제", "방수스프레이",
+    "구두약", "염색제", "구두솔", "신발솔",
+)
+
+
+_NON_PRODUCT_HINT_WORDS_NORM = tuple(
+    nw for nw in (normalize(w) for w in NON_PRODUCT_HINT_WORDS) if nw
+)
+
+
+def _is_non_product_hint(path: str) -> bool:
+    leaf_norm = normalize(leaf_of(path))
+    if not leaf_norm:
+        return False
+    return any(nw in leaf_norm for nw in _NON_PRODUCT_HINT_WORDS_NORM)
+
 
 # ★DB화 — 검색해서 없을 때 "안전하게" 물러날 수 있는 일반화(상위) 폴백어.
 # 형제 품목으로 새지 않고 반드시 이 안의 더 넓은 카테고리로만 물러난다.
@@ -563,44 +624,64 @@ def _contains_word(path: str, word: str) -> bool:
     return bool(nw) and nw in normalize(path)
 
 
-def _specific_item_conflict(path: str, parsed: "ParsedFilter") -> bool:
+_SAFE_FALLBACK_WORDS_NORM = tuple(
+    nw for nw in (normalize(w) for w in SAFE_FALLBACK_WORDS) if nw
+)
+_SPECIFIC_ITEM_WORDS_NORM: dict[str, tuple[str, ...]] = {
+    cls: tuple(nw for nw in (normalize(w) for w in words) if nw)
+    for cls, words in SPECIFIC_ITEM_WORDS.items()
+}
+_ALL_SPECIFIC_ITEM_WORDS_NORM: tuple[str, ...] = tuple(
+    {nw for words in _SPECIFIC_ITEM_WORDS_NORM.values() for nw in words}
+)
+
+
+def _specific_item_conflict(
+    path: str, parsed: "ParsedFilter", *, wanted: frozenset[str] | None = None
+) -> bool:
     """path 가 **찾는 것과 다른** 형제 품목이면 True — 근접 후보에서 제외한다.
 
     안전한 일반화 단어(잡화·기타의류 등)가 함께 있으면 형제 품목이라도
     막지 않는다 — '기타 신발(운동화 아님)' 처럼 안내성 표기일 수 있어서다.
     찾는 품목과 **관련된**(부분 겹침) 구체적 품목명은 형제로 보지 않는다
     (예: 찾는 것 "속옷"·"상의" 와 후보의 "여성속옷상의" 는 서로 관련어).
+
+    ★성능: `path`·`leaf` 문자열은 한 번만 정규화하고, 정적 단어 목록도
+    미리 정규화해 둔 것을 재사용한다(예전엔 후보마다 단어 하나하나를
+    다시 정규화해서, 마켓 카테고리가 1만 건대일 때 매우 느렸다). `wanted`
+    는 `parsed` 하나에 대해 항상 같은 값이므로(경로별로 달라지지 않음),
+    여러 경로를 순회하는 호출부에서 **한 번만** 계산해 넘기면 된다
+    (안 넘기면 이 함수가 직접 계산 — 하위호환, 단건 호출용).
     """
-    if any(_contains_word(path, w) for w in SAFE_FALLBACK_WORDS):
+    path_norm = normalize(path)
+    if any(nw in path_norm for nw in _SAFE_FALLBACK_WORDS_NORM):
         return False
-    wanted = {normalize(n) for n in expand_synonyms([parsed.mid, *parsed.lows]) if n}
+    if wanted is None:
+        wanted = frozenset(n for n in (normalize(x) for x in expand_synonyms([parsed.mid, *parsed.lows])) if n)
     if not wanted:
         return False
     # ★리프(가장 구체적인 마지막 단계)만 본다 — 상위 단계는 그룹 이름일
     # 뿐이라(예: "속옷/홈웨어 > 여성 속옷 상의" 의 "홈웨어"), 리프가 실제
     # 품목을 정확히 담고 있다.
-    leaf = leaf_of(path)
+    leaf_norm = normalize(leaf_of(path))
+    if not leaf_norm:
+        return False
+
+    # 리프에 SPECIFIC_ITEM_WORDS 중 있는 것만 먼저 추린다(대부분의 후보는
+    # 해당 사항이 없어 여기서 바로 끝난다 — 전체 순회를 아예 피한다).
+    present = [nw for nw in _ALL_SPECIFIC_ITEM_WORDS_NORM if nw in leaf_norm]
+    if not present:
+        return False
 
     # ★먼저 리프에 찾는 것과 관련된 구체품목명이 있는지부터 확인한다.
     # "정장샌들" 처럼 리프 하나에 무관 단어("정장"=의류)와 관련 단어
     # ("샌들"=신발)가 같이 있을 수 있다 — 관련 단어가 하나라도 있으면
     # 무관 단어가 섞여 있어도 형제 충돌로 보지 않는다.
-    for words in SPECIFIC_ITEM_WORDS.values():
-        for w in words:
-            if _contains_word(leaf, w):
-                nw = normalize(w)
-                if any(nw in want or want in nw for want in wanted):
-                    return False  # 찾는 것과 관련된 품목이 리프에 있음 — 형제 아님
+    for nw in present:
+        if any(nw in want or want in nw for want in wanted):
+            return False  # 찾는 것과 관련된 품목이 리프에 있음 — 형제 아님
 
-    for words in SPECIFIC_ITEM_WORDS.values():
-        for w in words:
-            if not _contains_word(leaf, w):
-                continue
-            nw = normalize(w)
-            if any(nw in want or want in nw for want in wanted):
-                continue  # (위에서 이미 처리 — 여기 도달하면 무관 단어)
-            return True
-    return False
+    return True
 
 
 def nearest_score(parsed: "ParsedFilter", path: str) -> float:
@@ -659,7 +740,8 @@ def nearest_category(name: str, paths: Sequence[str]) -> tuple[str, float]:
     """
     parsed = parse_filter_name(name)
     candidates = [p for p in paths if str(p or "").strip()]
-    safe = [p for p in candidates if not _specific_item_conflict(p, parsed)]
+    wanted = frozenset(n for n in (normalize(x) for x in expand_synonyms([parsed.mid, *parsed.lows])) if n)
+    safe = [p for p in candidates if not _specific_item_conflict(p, parsed, wanted=wanted)]
     pool = safe if safe else candidates
 
     best, best_score = "", -1.0
@@ -726,43 +808,41 @@ def class_of(text: str) -> str:
     계열은 아니다.
     """
     low = normalize(text)
+    if not low:
+        return ""
     best, best_key = "", (10**6, 0)
-    for cls, words in CLASS_WORDS.items():
-        for w in words:
-            nw = normalize(w)
-            if not nw:
-                continue
+    for cls, pairs in _CLASS_WORDS_NORM.items():
+        for nw, nlen in pairs:
             pos = low.find(nw)
             if pos < 0:
                 continue
-            key = (pos, -len(nw))
+            key = (pos, -nlen)
             if key < best_key:
                 best, best_key = cls, key
     return best
 
 
-def _is_generic_bucket_name(segment: str) -> bool:
-    """이 한 단계 이름 자체가 "패션의류잡화"·"의류잡화" 같은 포괄 버킷인가."""
-    s = normalize(segment)
-    return bool(s) and any(normalize(w) in s for w in GENERIC_CLASS_WORDS)
-
-
 def path_class(path: str) -> str:
     """카테고리 경로가 드러내는 품목 계열 (없으면 '').
 
-    ★최상위 단계가 "패션의류잡화"·"의류잡화" 같은 **포괄(잡화) 버킷 이름**
-    이면 그 판정에서 뺀다 — 그 문구 안에 우연히 "의류" 글자가 들어 있어
-    (class_of 는 위치 기반으로 가장 먼저 걸리는 단어를 고른다), 실제로는
-    모자·신발·선글라스인 경로가 전부 "의류" 계열로 잘못 분류되는 사고가
-    났다. 포괄 버킷이 아닌 상위 단계(예: "신발")는 그대로 포함해 계열
-    판정에 쓴다 — 리프 안에서 다른 계열 단어와 뒤섞인 경우(예: "정장샌들")
-    에도 상위 단계의 명확한 계열 표기가 우선하도록 한다.
+    ★최상위 단계(대분류)는 판정에서 먼저 뺀다. "패션의류잡화"·"의류
+    /언더웨어"·"가방/잡화" 같은 최상위 버킷 이름은 마켓마다 제각각
+    복합·포괄적이라, 그 문구 안에 우연히 "의류" 같은 글자가 들어 있으면
+    (class_of 는 위치 기반으로 가장 먼저 걸리는 단어를 고른다) 실제로는
+    속옷·모자·신발·선글라스인 경로가 전부 "의류" 계열로 잘못 분류되는
+    사고가 난다(실사례: "의류/언더웨어 > 남성언더웨어 > 드로즈/트렁크"
+    가 "언더웨어"라는 정확한 이름을 갖고도 최상위 "의류/언더웨어"의
+    "의류" 글자 때문에 "의류" 계열로 잘못 분류돼, "속옷" 검색에서
+    통째로 배제됐다). 중위·하위 단계만으로 계열이 안 드러날 때만(둘
+    다 빈 손일 때만) 최상위까지 포함해 다시 시도한다.
     """
     levels = split_levels(path)
     if not levels:
         return class_of(path)
-    if len(levels) > 1 and _is_generic_bucket_name(levels[0]):
-        levels = levels[1:]
+    if len(levels) > 1:
+        without_top = class_of(" ".join(levels[1:]))
+        if without_top:
+            return without_top
     return class_of(" ".join(levels))
 
 
@@ -786,17 +866,26 @@ def strip_other_classes(paths: Sequence[str], cls: str) -> list[str]:
 
 
 def gender_paths(paths: Sequence[str], gender: str) -> list[str]:
-    """★규칙2: 성별이 구분된 필터면 그 성별 카테고리 안에서만 고른다.
+    """성별이 구분된 필터일 때 후보를 정리한다 — **반대 성별만** 제외한다.
 
-    같은 성별 경로가 있으면 그것만, 없으면 **다른 성별이 아닌** 경로만 남긴다.
+    ★실사례(2026-08-23) 수정: 예전에는 "같은 성별 경로가 있으면 그것만,
+    없으면 무성별만" 처럼 무성별(성별 표기가 아예 없는) 후보를 **하드
+    배제**했다. 그런데 실제 마켓 데이터는 "스니커즈"처럼 흔히 성별
+    표기 없이 등록된 정확한 리프가 있는데도, 성별이 명시된 다른(하지만
+    품목은 안 맞는) 후보가 있다는 이유만으로 무성별의 정확한 후보가
+    통째로 사라져 엉뚱한 것(예: "남성샌들 > 아쿠아슈즈")이 선택되는
+    사고가 났다.
+    요건재정의(2026-08-22 B-9) 의 우선순위 원칙("남성 > 중성=혼용=공용")
+    도 무성별을 배제 대상이 아니라 **우선순위가 낮은 후보**로 다룬다.
+    반대 성별 배제는 절대규칙으로 상위(`strip_opposite_gender`)에서 이미
+    처리되므로, 여기서는 같은 필터를 한 번 더 적용해 안전판만 유지하고
+    무성별 후보는 그대로 남긴다 — 같은 성별을 우선하는 것은
+    `priority_rank` 의 점수 가산으로 처리한다.
     """
     if not gender:
         return list(paths)
-    same = [p for p in paths if has_gender(p, gender)]
-    if same:
-        return same
-    others = [g for g in GENDER_WORDS if g != gender]
-    return [p for p in paths if not any(has_gender(p, g) for g in others)]
+    others = opposite_of(gender)
+    return [p for p in paths if not any(has_gender(p, o) for o in others)]
 
 
 def item_words_of(parsed: "ParsedFilter") -> list[str]:
@@ -982,9 +1071,19 @@ def find_category(
     #   이유로) 포기하지 않고 원래 후보로 계속 진행해 "가장 비슷한 것"을
     #   반드시 고른다.
     if parsed.mid or parsed.lows:
-        safe_paths = [p for p in all_paths if not _specific_item_conflict(p, parsed)]
+        _wanted = frozenset(
+            n for n in (normalize(x) for x in expand_synonyms([parsed.mid, *parsed.lows])) if n
+        )
+        safe_paths = [p for p in all_paths if not _specific_item_conflict(p, parsed, wanted=_wanted)]
         if safe_paths:
             all_paths = safe_paths
+
+    # ★소프트규칙(실사례): "건강목걸이"(건강용품)·"구두약"(관리용품) 처럼
+    #   품목명은 담고 있지만 실제로는 그 품목 자체가 아닌 카테고리는
+    #   되도록 고르지 않는다. 이것 말고 대안이 전혀 없을 때만 되돌아온다.
+    non_hint_paths = [p for p in all_paths if not _is_non_product_hint(p)]
+    if non_hint_paths:
+        all_paths = non_hint_paths
 
     # ★규칙 2·3·4 — 성별·품목명·의류 우선순위(성별 우선)로 후보를 먼저 좁힌다
     paths, notes = constrain(all_paths, parsed)

@@ -188,6 +188,58 @@ def test_add_path_ignores_blank_segments():
     assert node.level == 2
 
 
+# ── 성능 회귀 방지 (실사례 2026-08-23) ──────────────────────────────
+#   `leaves()`/`is_leaf()` 가 카테고리마다 전체를 다시 훑는 O(N²) 로
+#   짜여 있어, 실제 6개 마켓 데이터(14,000+ 건)에서 `build_dictionary()`
+#   1회에 4초 이상 걸렸다(그 결과 `find_category` 호출마다 마켓당
+#   0.5초씩 걸려 전체 실행이 심각하게 느려졌다). 부모→자식 색인으로
+#   O(1)/O(N) 이 되도록 고쳤고, 아래 테스트로 회귀를 막는다.
+
+
+def _synthetic_paths(n_top: int = 20, n_mid: int = 20, n_leaf: int = 5) -> list[str]:
+    return [
+        f"대분류{t} > 중분류{t}-{m} > 리프{t}-{m}-{leaf}"
+        for t in range(n_top)
+        for m in range(n_mid)
+        for leaf in range(n_leaf)
+    ]
+
+
+def test_build_dictionary_is_fast_for_thousands_of_categories():
+    import time
+
+    paths = _synthetic_paths(20, 20, 5)  # 2,000개 카테고리
+    t0 = time.time()
+    db = kd.build(paths)
+    elapsed = time.time() - t0
+    assert len(db.categories) > 2000
+    assert elapsed < 2.0, f"2,000개 카테고리 구축에 {elapsed:.2f}초 — 너무 느림(O(N^2) 회귀 의심)"
+
+
+def test_leaves_and_is_leaf_do_not_rescan_everything_per_call():
+    import time
+
+    paths = _synthetic_paths(20, 20, 5)
+    db = kd.build(paths)
+    t0 = time.time()
+    for _ in range(50):
+        db.leaves()
+    elapsed = time.time() - t0
+    assert elapsed < 1.0, f"leaves() 50회 호출에 {elapsed:.2f}초 — 너무 느림(O(N^2) 회귀 의심)"
+
+
+def test_resolve_is_fast_after_build():
+    import time
+
+    paths = _synthetic_paths(20, 20, 5)
+    db = kd.build(paths)
+    t0 = time.time()
+    for _ in range(200):
+        db.resolve("리프0-0-0")
+    elapsed = time.time() - t0
+    assert elapsed < 0.5, f"resolve() 200회 호출에 {elapsed:.2f}초 — 너무 느림(O(N^2) 회귀 의심)"
+
+
 # ── 범위 한정(scoped) 폭포수 — "이 카테고리가 실패했을 때 형제/조상만" ──
 
 

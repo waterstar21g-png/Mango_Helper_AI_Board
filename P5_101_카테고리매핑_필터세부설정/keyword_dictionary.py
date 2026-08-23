@@ -78,11 +78,22 @@ class KeywordEntry:
 
 @dataclass
 class KeywordDB:
-    """CATEGORY_MASTER + KEYWORD_DICTIONARY 를 함께 관리하는 연관검색어DB."""
+    """CATEGORY_MASTER + KEYWORD_DICTIONARY 를 함께 관리하는 연관검색어DB.
+
+    ★성능(실사례 2026-08-23): 카테고리 수가 1만 건대(6개 마켓 실데이터
+    기준 14,000+)로 커지면, "리프인지"를 매번 전체를 훑어서 판정하는
+    방식(`is_leaf`)은 `leaves()` 호출 1회에 O(N²) 이 걸려 4초 가까이
+    걸렸다(그 결과 `find_category` 한 번 호출이 마켓당 0.5초 — 6개
+    마켓·여러 행이면 실행 전체가 심각하게 느려진다). 부모→자식 색인을
+    유지해 O(1)/O(N) 으로 바꿨다.
+    """
 
     categories: dict[str, CategoryNode] = field(default_factory=dict)
     keywords: list[KeywordEntry] = field(default_factory=list)
     _path_to_id: dict[str, str] = field(default_factory=dict)
+    _children: dict[str, list[str]] = field(default_factory=dict)  # parent_id("" 는 ROOT) -> [자식 cat_id]
+    _keyword_index: dict[str, list[KeywordEntry]] = field(default_factory=dict)
+    _leaf_name_index: dict[str, list[str]] = field(default_factory=dict)
     _next_cat_seq: int = 1
     _next_kw_seq: int = 1
 
@@ -106,6 +117,8 @@ class KeywordDB:
                 cat_id = self._new_cat_id()
                 self._path_to_id[key] = cat_id
                 self.categories[cat_id] = CategoryNode(cat_id, name, parent_id, i + 1, full)
+                self._children.setdefault(parent_id or "", []).append(cat_id)
+                self._children.setdefault(cat_id, [])  # 자기 자신도 등록(빈 자식 목록)
             parent_id = cat_id
             leaf_id = cat_id
         return leaf_id
@@ -121,13 +134,14 @@ class KeywordDB:
         return cid
 
     def is_leaf(self, cat_id: str) -> bool:
-        return not any(c.parent_id == cat_id for c in self.categories.values())
+        return not self._children.get(cat_id)
 
     def leaves(self) -> list[CategoryNode]:
-        return [c for c in self.categories.values() if self.is_leaf(c.cat_id)]
+        return [c for c in self.categories.values() if not self._children.get(c.cat_id)]
 
     def children_of(self, cat_id: str | None) -> list[CategoryNode]:
-        return [c for c in self.categories.values() if c.parent_id == cat_id]
+        ids = self._children.get(cat_id or "", [])
+        return [self.categories[i] for i in ids if i in self.categories]
 
     def ancestors_of(self, cat_id: str) -> list[CategoryNode]:
         """가까운 조상부터 먼 조상(대분류) 순으로."""
@@ -147,7 +161,9 @@ class KeywordDB:
             return
         kid = f"K{self._next_kw_seq:04d}"
         self._next_kw_seq += 1
-        self.keywords.append(KeywordEntry(kid, keyword, target_cat_id, mapping_type, priority))
+        entry = KeywordEntry(kid, keyword, target_cat_id, mapping_type, priority)
+        self.keywords.append(entry)
+        self._keyword_index.setdefault(keyword, []).append(entry)
 
     def build_dictionary(self) -> "KeywordDB":
         """리프 카테고리마다 SY·MO·RE·EX 키워드를 자동 생성한다.
@@ -159,9 +175,13 @@ class KeywordDB:
         - EX(확대범주) : 조상 노드 이름(가까운 조상=우선순위 높음)
         """
         self.keywords.clear()
+        self._keyword_index.clear()
         self._next_kw_seq = 1
 
         leaves = self.leaves()
+        self._leaf_name_index.clear()
+        for leaf in leaves:
+            self._leaf_name_index.setdefault(leaf.cat_name, []).append(leaf.cat_id)
         siblings_by_parent: dict[str | None, list[CategoryNode]] = {}
         for leaf in leaves:
             siblings_by_parent.setdefault(leaf.parent_id, []).append(leaf)
@@ -226,15 +246,16 @@ class KeywordDB:
     def lookup(
         self, keyword: str, *, mapping_types: Sequence[str] | None = None
     ) -> list[KeywordEntry]:
-        """검색어와 정확히 일치하는 KEYWORD_DICTIONARY 항목을 우선순위순으로."""
+        """검색어와 정확히 일치하는 KEYWORD_DICTIONARY 항목을 우선순위순으로.
+
+        ★색인(`_keyword_index`)으로 O(1) 조회 — 검색어가 20만 건대로
+        많아져도 전체를 훑지 않는다.
+        """
         want = str(keyword or "").strip()
         if not want:
             return []
-        hits = [
-            k
-            for k in self.keywords
-            if k.search_keyword == want and (mapping_types is None or k.mapping_type in mapping_types)
-        ]
+        candidates = self._keyword_index.get(want, [])
+        hits = [k for k in candidates if mapping_types is None or k.mapping_type in mapping_types]
         hits.sort(key=lambda k: k.priority)
         return hits
 
@@ -247,10 +268,10 @@ class KeywordDB:
         if not want:
             return None, "검색어 없음"
 
-        # 1) 완전일치 — 리프 Cat_Name 이 검색어와 동일
-        for leaf in self.leaves():
-            if leaf.cat_name == want:
-                return leaf.cat_id, "1) 완전일치"
+        # 1) 완전일치 — 리프 Cat_Name 이 검색어와 동일 (색인 O(1) 조회)
+        leaf_ids = self._leaf_name_index.get(want)
+        if leaf_ids:
+            return leaf_ids[0], "1) 완전일치"
 
         # 2) 유사어 매칭 (SY·MO)
         hits = self.lookup(want, mapping_types=("SY", "MO"))
@@ -416,12 +437,13 @@ class KeywordDB:
 
         allowed = None if available_cat_ids is None else set(available_cat_ids)
 
-        # 1) 완전일치
-        for leaf in self.leaves():
-            if leaf.cat_name == want:
-                if allowed is None or leaf.cat_id in allowed:
-                    return leaf.cat_id, "1) 완전일치"
-                return self.substitute_for(leaf.cat_id, available_cat_ids=available_cat_ids)
+        # 1) 완전일치 (색인 O(1) 조회)
+        leaf_ids = self._leaf_name_index.get(want)
+        if leaf_ids:
+            leaf_id = leaf_ids[0]
+            if allowed is None or leaf_id in allowed:
+                return leaf_id, "1) 완전일치"
+            return self.substitute_for(leaf_id, available_cat_ids=available_cat_ids)
 
         # 2) 유사어 매칭 (SY·MO)
         hits = self.lookup(want, mapping_types=("SY", "MO"))
