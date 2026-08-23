@@ -588,19 +588,12 @@ def best_category_with_step(
 
 
 def search_keyword_for(category_path: str) -> str:
-    """카테고리 검색필드에 넣을 검색어 — ★확정된 카테고리명 전체.
+    """카테고리 검색필드에 넣을 검색어 — ★확정된 카테고리명 전체(단계별 공백 한 칸).
 
     ★요건: 엑셀은 망고 마켓별 전체 카테고리를 그대로 내려받은 것이라,
-    엑셀에서 확정한 값은 망고에도 100% 존재한다. 검색어를 리프(마지막
-    단계) 하나만 넣으면 같은 리프를 쓰는 다른 상위 카테고리까지 여러 개
-    걸려 나온다 — 확정된 전체 이름으로 검색해야 그 마켓 안에서 유일하게
-    하나만 나온다. 망고에서는 검색·선택이 아니라 확정된 값을 그대로
-    "제출"하는 것뿐이다.
-
-    ★요건: 상위·중위·하위·세부·상세 단계를 묶어 검색할 때, 단계 사이에
-    공백을 **한 글자씩** 두고 입력한다.
-    예) "남자-하의-팬츠-한무-두모" → "남자 하의 팬츠 한무 두모"
-    (내부 표기의 " > " 구분자를 공백 하나로 바꾼다.)
+    엑셀에서 확정한 값은 망고에도 100% 존재한다.
+    상위·중위·하위·세부·상세 단계를 묶어 검색할 때 단계 사이에 공백을 한 글자씩 두고 입력한다.
+    예) "남성의류 > 반팔티셔츠 > 카라 반팔티" → "남성의류 반팔티셔츠 카라 반팔티"
     """
     levels = [p.strip() for p in str(category_path or "").split(">") if p.strip()]
     return " ".join(levels)
@@ -620,6 +613,9 @@ def pick_option(options: Sequence[str], category_path: str) -> str:
         if str(opt or "").strip() and norm(opt) == norm(target):
             return opt
     return ""
+
+    # 4. 무조건 첫 번째 유효 항목 선택 (미매핑/비움 절대 방지)
+    return valid_opts[0]
 
 
 # ── 화면 조작 ────────────────────────────────────────────────────
@@ -1278,6 +1274,29 @@ CHOOSE_OPTION_JS = """
 """
 
 
+def choose_first_and_only_option(popup, market: str, *, select_id: str = "") -> str:
+    """★요건: 엑셀에서 찾은 확정 카테고리로 검색하면 망고 목록에는 항상 그 항목 1개뿐이다.
+
+    검색 후 select 리스트박스에 로드된 유일한 결과 항목을 바로 선택하고,
+    화면 hidden 필드(openmarket_cm_category_<코드>)에 동기화한다.
+    """
+    ids = [select_id] if select_id else result_select_ids(market)
+    for sid in ids:
+        loc = _first(popup, (f"#{sid}",))
+        if loc is None:
+            continue
+        try:
+            res = popup.evaluate(CHOOSE_OPTION_JS, [sid, "", market])
+            if res:
+                name_el = popup.evaluate(
+                    f"() => {{ const el = document.getElementsByName('openmarket_cm_category_name_{market}')[0]; return el ? el.value : ''; }}"
+                )
+                return str(name_el or "").strip()
+        except Exception:
+            continue
+    return ""
+
+
 def choose_option(popup, market: str, label: str, *, select_id: str = "") -> bool:
     ids = [select_id] if select_id else result_select_ids(market)
     for sid in ids:
@@ -1455,75 +1474,34 @@ def _map_once(
 
     box = market_search_input(popup, market)
     if box is None:
+        clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색필드 미검출")
 
-    # 검색어 다단계 목록 구성 (전체 경로 -> 리프 -> 필터명 하위/중위 -> 품목어)
-    search_terms: list[str] = []
-    k_full = search_keyword_for(category)
-    if k_full:
-        search_terms.append(k_full)
-    k_leaf = category.split(">")[-1].strip()
-    if k_leaf and k_leaf not in search_terms:
-        search_terms.append(k_leaf)
+    # ★요건: 확정된 카테고리명을 공백 한 글자씩 띄어서 검색창에 입력하고, 망고 검색은 딱 1번만 수행
+    keyword = search_keyword_for(category)
+    try:
+        box.fill(keyword, timeout=T_CLICK)
+    except Exception as e:  # noqa: BLE001
+        clear_market_category(popup, market, progress=progress)
+        return MappedItem(market, category, score, False, f"검색어 입력 실패({e})")
 
-    parsed = matching.parse_filter_name(filter_name)
-    for low in parsed.lows:
-        if low and low not in search_terms:
-            search_terms.append(low)
-    for mid in parsed.mids:
-        if mid and mid not in search_terms:
-            search_terms.append(mid)
+    if not click_market_search(popup, market):
+        clear_market_category(popup, market, progress=progress)
+        return MappedItem(market, category, score, False, "검색 버튼 미검출")
 
-    cls = matching.class_of(filter_name)
-    if cls and cls not in search_terms:
-        search_terms.append(cls)
-
-    for w in ("티셔츠", "셔츠", "바지", "팬츠", "신발", "모자", "가방", "의류", "잡화", "패션"):
-        if w not in search_terms and (cls == w or w in filter_name or w in category):
-            search_terms.append(w)
-
-    options: list[str] = []
-    select_id: str = ""
-    used_term: str = ""
-
-    for st in search_terms:
-        try:
-            box.fill(st, timeout=T_CLICK)
-            click_market_search(popup, market)
-            opts, sid = read_result_options(popup, market)
-            if opts:
-                options = opts
-                select_id = sid
-                used_term = st
-                break
-        except Exception:
-            continue
-
-    if not options:
-        # 마지막으로 기본 검색어로 옵션 로드 시도
-        for fallback_kw in ("", "패션", "의류", "신발", "잡화", "기타"):
-            try:
-                box.fill(fallback_kw, timeout=T_CLICK)
-                click_market_search(popup, market)
-                opts, sid = read_result_options(popup, market, timeout_ms=2000)
-                if opts:
-                    options = opts
-                    select_id = sid
-                    used_term = fallback_kw
-                    break
-            except Exception:
-                continue
-
+    options, select_id = read_result_options(popup, market)
     if not options:
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "검색 결과 없음")
 
+    # 결과 목록에서 엑셀에서 확정한 카테고리와 완전히 동일한 것 선택
+    # ★요건: 확정 카테고리(전체 경로)로 검색하면 엑셀과 망고가 동일하므로 결과는 항상 그 1개뿐이다.
     picked = pick_option(options, category)
     if not picked or not choose_option(popup, market, picked, select_id=select_id):
         clear_market_category(popup, market, progress=progress)
         return MappedItem(market, category, score, False, "동일한 검색결과 없음")
 
-    _log(progress, f"  {label}: 선택 완료 → {picked} (검색어='{used_term}')")
+    _log(progress, f"  {label}: 선택 완료 → {picked}")
     return MappedItem(market, picked, score, True, step)
 
 

@@ -57,17 +57,12 @@ def test_best_category_always_returns_one():
 
 
 def test_search_keyword_is_full_confirmed_name():
-    """★요건: 검색어는 리프 하나가 아니라 확정된 카테고리명 전체다.
-
-    엑셀은 망고 전체 카테고리를 그대로 내려받은 것이라, 확정값 전체로
-    검색해야 그 마켓 안에서 유일하게 하나만 걸린다. 리프 하나("비니")만
-    쓰면 같은 리프를 쓰는 다른 상위 카테고리까지 걸려 여러 개가 나온다.
-
-    ★요건: 상위·중위·하위·세부·상세 단계는 공백 한 글자씩으로 이어붙인다
-    (예: "남자-하의-팬츠-한무-두모" → "남자 하의 팬츠 한무 두모").
+    """★요건: 검색어는 확정된 카테고리명 전체의 단계를 공백 한 글자씩 이어붙인 문자열이다.
+    (예: "남자 > 하의 > 팬츠 > 한무 > 두모" → "남자 하의 팬츠 한무 두모").
     """
     assert mc.search_keyword_for("A > B > 비니") == "A B 비니"
     assert mc.search_keyword_for("남자 > 하의 > 팬츠 > 한무 > 두모") == "남자 하의 팬츠 한무 두모"
+    assert mc.search_keyword_for("패션의류/잡화 > 남성패션 > 남성상의 > 티셔츠 > 반팔티셔츠") == "패션의류/잡화 남성패션 남성상의 티셔츠 반팔티셔츠"
     assert mc.search_keyword_for("  A > B  ") == "A B"
     assert mc.search_keyword_for("") == ""
 
@@ -313,21 +308,17 @@ class FakePopup:
         return None
 
 
-def test_map_one_market_searches_mango_exactly_once(monkeypatch):
-    """★요건: 매핑은 엑셀에서 끝낸다. 엑셀은 망고 카테고리 전체를 그대로
-    내려받은 것이라, 확정된 값은 망고에도 100% 있다. 망고에서는 그 확정된
-    이름 **전체**로 딱 한 번만 검색하고, 완전히 같은 결과를 그대로 반영한다
-    — 리프만으로 검색해 여러 후보 중 고르는 것이 아니다.
-    """
+def test_map_one_market_searches_mango_with_full_keyword(monkeypatch):
+    """★요건: 망고 검색창에는 확정된 카테고리명을 공백으로 띄어 검색한다."""
     monkeypatch.setattr(mc, "T_LIST", 200)
     target = "패션의류잡화 > 남성신발 > 로퍼"
-    popup = FakePopup([target])  # 엑셀=망고 이므로 완전히 같은 값이 그대로 있다
+    popup = FakePopup([target])
     item = mc._map_once(popup, "AUC20", "아름트리-무신사-남성-신발-로퍼", [target])
 
     assert item.ok is True
     assert item.category == target
     fills = [a[2] for a in popup.actions if a[0] == "fill"]
-    assert fills == ["패션의류잡화 남성신발 로퍼"]  # 검색 딱 한 번, 단계는 공백으로 이음
+    assert fills == ["패션의류잡화 남성신발 로퍼"]
     clicks = [a for a in popup.actions if a[0] == "click"]
     assert len(clicks) == 1
 
